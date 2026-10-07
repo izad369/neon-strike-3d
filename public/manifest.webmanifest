@@ -1,0 +1,17 @@
+{
+  "name": "NEON STRIKE 3D",
+  "short_name": "Neon Strike",
+  "start_url": "/",
+  "display": "fullscreen",
+  "background_color": "#0a0a14",
+  "theme_color": "#0a0a14",
+  "description": "Installable offline-ready web app shell.",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
