@@ -55,27 +55,32 @@ bun run dev        # http://localhost:3000
 
 ## Deploy to Cloudflare Pages
 
-### Option A — single file (fastest)
+The repo ships a **prebuilt, self-contained** `dist/index.html` (the entire game in one file, already committed). You do **not** need any build step on Cloudflare — this is the most reliable setup and avoids all npm/Next.js build errors.
 
-Build one self-contained HTML file and drag-drop it:
+### Option A — Git integration (auto-deploys on every push)
+
+1. [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Pages** → **Connect to Git** → select this repo
+2. In **Build settings** enter exactly:
+   - Framework preset: **None**
+   - Build command: **(leave empty)**
+   - Build output directory: **`dist`**
+3. **Save and Deploy** — done. Every future `git push` redeploys automatically.
+
+> ⚠️ Do **not** pick the "Next.js" framework preset. The Next.js part of this repo is only a dev host — `@cloudflare/next-on-pages` does not support Next 16, and there is no `package-lock.json` (only `bun.lock`), so any npm-based build will fail. The deployable game is the static `dist/` folder.
+
+### Option B — Drag & drop (no Git at all)
+
+1. **Workers & Pages** → **Create** → **Pages** → **Upload assets**
+2. Drag `dist/index.html` in and deploy — done.
+
+### Rebuilding `dist/` after changing game code
 
 ```bash
-npm run build:standalone     # -> dist/neon-strike.html
+npm install            # or bun install
+npm run build:standalone   # -> dist/index.html + dist/neon-strike.html
 ```
 
-1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Pages** → **Upload assets**
-2. Drag `dist/neon-strike.html` in, deploy — done.
-
-### Option B — full static site from this repo
-
-```bash
-npm run build:static         # -> out/  (fully static Next.js export)
-```
-
-- **Upload assets**: drag the `out/` folder to Cloudflare Pages, or
-- **Git integration**: connect this repo on Cloudflare Pages with
-  - Build command: `npm run build:static`
-  - Build output directory: `out`
+Then commit the updated `dist/` files (or drag-drop them).
 
 ## Tech stack
 

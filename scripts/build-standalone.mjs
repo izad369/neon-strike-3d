@@ -54,4 +54,7 @@ const outDir = join(root, 'dist');
 mkdirSync(outDir, { recursive: true });
 const outPath = join(outDir, 'neon-strike.html');
 writeFileSync(outPath, html);
-console.log(`✔ Built ${outPath} (${(html.length / 1024 / 1024).toFixed(2)} MB)`);
+// Cloudflare Pages / any static host serves index.html at the site root,
+// so dist/ is committed with BOTH names (zero-build deploy).
+writeFileSync(join(outDir, 'index.html'), html);
+console.log(`✔ Built ${outPath} + index.html (${(html.length / 1024 / 1024).toFixed(2)} MB)`);
