@@ -6,6 +6,10 @@ export default function Home() {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
     let cleanup: (() => void) | undefined;
     let cancelled = false;
     import('@/game/main').then((m) => {
@@ -21,7 +25,7 @@ export default function Home() {
   return (
     <main
       ref={ref}
-      aria-label="NEON STRIKE 3D - first person shooter"
+      aria-label="NEON STRIKE 3D"
       style={{ position: 'fixed', inset: 0, background: '#0a0a14', overflow: 'hidden' }}
     />
   );
