@@ -14,14 +14,16 @@ export class World {
   patrolPoints: THREE.Vector3[] = [];
   private raycaster = new THREE.Raycaster();
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, opts?: { mobile?: boolean }) {
+    const mobile = !!opts?.mobile;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(COLORS.dark);
     this.scene.fog = new THREE.FogExp2(COLORS.dark, 0.014);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 300);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    this.renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: 'high-performance' });
+    // mobile GPUs: cap pixel ratio harder (fill-rate is the bottleneck on phones)
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.4 : 1.75));
     container.appendChild(this.renderer.domElement);
     this.resize();
 
@@ -30,7 +32,10 @@ export class World {
   }
 
   resize() {
-    const w = window.innerWidth, h = window.innerHeight;
+    // visualViewport covers iOS toolbars/rotation better than window alone
+    const vv = window.visualViewport;
+    const w = Math.round(vv?.width ?? window.innerWidth);
+    const h = Math.round(vv?.height ?? window.innerHeight);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);

@@ -12,6 +12,7 @@ import { Menus } from './menus';
 import { NetHost, NetClient } from './net';
 import { injectStyles } from './hud';
 import { normKey } from './player';
+import { TouchControls, detectTouch } from './touch';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -38,6 +39,9 @@ class Game {
   private client: NetClient | null = null;
   private myId = '1';
   private nextPeerNum = 2;
+  private touch: TouchControls;
+  private touchActive = false;
+  private rotMq: MediaQueryList | null = null;
 
   private bots = new Map<string, Bot>();            // offline/host: full AI bots
   private botViews = new Map<string, RemotePlayer>(); // client: bot visuals
@@ -54,10 +58,17 @@ class Game {
   private prevShootFlags = new Map<string, boolean>();
 
   constructor(private root: HTMLElement) {
-    this.world = new World(root);
+    // touch detection first — it tunes the renderer for mobile GPUs
+    this.touchActive = detectTouch();
+    if (this.touchActive) this.root.classList.add('ns-touch-mode');
+    this.world = new World(root, { mobile: this.touchActive });
     this.world.scene.add(this.world.camera);
     this.fx = new Effects(this.world.scene);
     this.hud = new HUD(root);
+    this.touch = new TouchControls(root, {
+      onPause: () => { if (this.state === 'playing' && !this.paused && !this.menus.isVisible()) this.pauseGame(); },
+      onScoreboard: (show) => this.showScoreboard(show),
+    });
     this.menus = new Menus(root, {
       onStartOffline: (name, bots, diff) => this.startOffline(name, bots, diff),
       onHost: (name, bots, diff) => this.startHost(name, bots, diff),
@@ -65,10 +76,13 @@ class Game {
       onResume: () => this.resume(),
       onLeaveToMenu: () => this.leaveToMenu(),
       onRestartMatch: () => this.restartMatch(),
+      onTouchMode: () => this.applyTouchMode(),
     });
     this.menus.loadName();
+    this.menus.initTouchSeg();
     this.player = new LocalPlayer(this.world, this.world.camera, this.audio, root);
     this.player.onShoot = (o, d) => this.onLocalShoot(o, d);
+    this.player.touch = this.touch;
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('pointerlockchange', this.onPointerLock);
@@ -77,6 +91,9 @@ class Game {
     this.world.renderer.domElement.addEventListener('click', this.onCanvasClick);
     window.addEventListener('beforeunload', this.onBeforeUnload);
     window.addEventListener('ns-lobby-start', this.onLobbyStart as EventListener);
+    // auto-pause when the phone is rotated to portrait mid-match
+    this.rotMq = window.matchMedia('(orientation: portrait)');
+    this.rotMq.addEventListener?.('change', this.onOrientationChange);
 
     this.menus.show('main');
     this.renderLoop();
@@ -106,6 +123,46 @@ class Game {
     this.player.sensitivity = parseInt(this.menus.sensSlider.value, 10) / 100 || 1;
   }
 
+  /** touch UI + immersive mode (fullscreen / landscape lock) when a match starts */
+  private enterTouchUI() {
+    if (this.touchActive) {
+      this.tryImmersive();
+      this.touch.setEnabled(true);
+      this.hud.setHint('');
+    } else {
+      this.hud.setHint('ESC — pause  |  TAB — scoreboard');
+    }
+    this.requestLock();
+  }
+
+  /** best-effort fullscreen + landscape lock (Android; iOS Safari ignores gracefully) */
+  private tryImmersive() {
+    try {
+      const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
+      if (!document.fullscreenElement) {
+        const p = el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.();
+        p?.catch(() => { /* user or browser refused — fine */ });
+      }
+    } catch { /* unsupported */ }
+    try {
+      const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      so?.lock?.('landscape')?.catch(() => { /* unsupported */ });
+    } catch { /* unsupported */ }
+  }
+
+  /** touch mode changed from the pause menu — re-evaluate and apply live */
+  private applyTouchMode() {
+    const active = detectTouch();
+    if (active === this.touchActive) { if (this.state === 'playing' && !this.paused) this.touch.setEnabled(active); return; }
+    this.touchActive = active;
+    this.root.classList.toggle('ns-touch-mode', active);
+    if (this.state === 'playing' && !this.paused) this.touch.setEnabled(active);
+  }
+
+  private onOrientationChange = () => {
+    if (this.touchActive && this.state === 'playing' && !this.paused && !this.menus.isVisible()) this.pauseGame();
+  };
+
   private enterMatch() {
     this.state = 'playing';
     this.paused = false;
@@ -113,7 +170,7 @@ class Game {
     this.menus.show(null);
     this.hud.show(true);
     this.hud.setRoom(this.mode === 'host' ? `ROOM ${this.host?.code ?? ''}` : this.mode === 'client' ? `ROOM ${this.clientRoom}` : '');
-    this.requestLock();
+    this.enterTouchUI();
   }
 
   private startOffline(name: string, botCount: number, diff: Difficulty) {
@@ -126,7 +183,6 @@ class Game {
     this.setupLocal(name);
     for (let i = 0; i < botCount; i++) this.addBot(diff);
     this.hud.setKD(0, 0);
-    this.hud.setHint('ESC — pause  |  TAB — scoreboard');
     this.enterMatch();
   }
 
@@ -309,7 +365,7 @@ class Game {
       this.hud.setKD(0, 0);
       this.player.hp = 100;
       this.player.alive = true;
-      this.requestLock();
+      this.enterTouchUI();
       return;
     }
     if (msg.t === 'snap') {
@@ -365,6 +421,7 @@ class Game {
         this.expectUnlock = true;
         document.exitPointerLock?.();
         this.player.enabled = false;
+        this.touch.setEnabled(false);
         this.hud.show(false);
         this.audio.matchEnd();
         this.menus.showEnd(msg.board, this.myId, false);
@@ -495,6 +552,7 @@ class Game {
   private onLocalDeath() {
     this.player.alive = false;
     this.player.enabled = false;
+    this.touch.setEnabled(false); // hide touch UI during the respawn overlay
     this.respawnDeadline = performance.now() + CFG.respawnDelay * 1000;
     this.hud.showRespawn(true, CFG.respawnDelay);
     this.expectUnlock = false;
@@ -503,6 +561,7 @@ class Game {
   private respawnLocal(p: THREE.Vector3) {
     this.player.spawnAt(p);
     this.player.enabled = true;
+    if (this.touchActive) this.touch.setEnabled(true);
     this.hud.showRespawn(false);
     if (this.state === 'playing') this.requestLock();
   }
@@ -554,6 +613,7 @@ class Game {
     this.expectUnlock = true;
     document.exitPointerLock?.();
     this.player.enabled = false;
+    this.touch.setEnabled(false);
     this.hud.show(false);
     this.audio.matchEnd();
     this.host?.broadcast({ t: 'ev', k: 'end', board } as HostMsg);
@@ -568,6 +628,7 @@ class Game {
     this.paused = false;
     this.expectUnlock = true;
     document.exitPointerLock?.();
+    this.touch.setEnabled(false);
     this.hud.show(false);
     this.hud.showRespawn(false);
     this.hud.scoreboard(false, [], '');
@@ -585,6 +646,7 @@ class Game {
   // ================= input & loop =================
 
   private requestLock() {
+    if (this.touchActive) return; // no pointer lock on touch devices
     this.expectUnlock = false;
     this.world.renderer.domElement.requestPointerLock?.();
   }
@@ -593,6 +655,7 @@ class Game {
     this.menus.show(null);
     this.paused = false;
     this.player.enabled = this.player.alive;
+    if (this.touchActive) this.touch.setEnabled(true);
     this.requestLock();
     this.audio.resume();
   }
@@ -601,10 +664,12 @@ class Game {
     this.paused = true;
     this.player.enabled = false;
     this.player.mouseDown = false;
+    this.touch.setEnabled(false);
     this.menus.show('pause');
   }
 
   private onCanvasClick = () => {
+    if (this.touchActive) return; // taps belong to the touch zones
     if (this.state === 'playing' && !this.menus.isVisible()) this.requestLock();
   };
 
@@ -756,6 +821,8 @@ class Game {
     window.removeEventListener('keyup', this.onKeyup);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     window.removeEventListener('ns-lobby-start', this.onLobbyStart as EventListener);
+    this.rotMq?.removeEventListener?.('change', this.onOrientationChange);
+    this.touch.destroy();
     this.player.dispose();
     this.world.dispose();
     this.root.remove();

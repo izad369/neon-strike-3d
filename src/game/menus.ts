@@ -1,6 +1,7 @@
 // NEON STRIKE 3D - menu system (DOM)
 import { Difficulty } from './constants';
 import { esc } from './menus-utils';
+import { TouchMode, touchModePref, detectTouch } from './touch';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help';
 
@@ -11,6 +12,7 @@ export interface MenuCallbacks {
   onResume(): void;
   onLeaveToMenu(): void;
   onRestartMatch(): void;
+  onTouchMode(mode: TouchMode): void;
 }
 
 export class Menus {
@@ -74,6 +76,13 @@ export class Menus {
     p.querySelector('.ns-b-offline')!.addEventListener('click', () => { this.show('offline'); });
     p.querySelector('.ns-b-online')!.addEventListener('click', () => { this.show('online'); });
     p.querySelector('.ns-b-help')!.addEventListener('click', () => { this.show('help'); });
+    // positive note when touch is available (detection includes ?touch=1 for desktop preview)
+    const note = p.querySelector('.ns-mobile-note') as HTMLElement;
+    if (detectTouch()) {
+      note.classList.add('ok');
+      note.innerHTML = '&#10003; Touch controls ready &mdash; play on your phone or tablet (landscape recommended).';
+      note.style.display = 'block';
+    }
     this.addPanel('main', p);
   }
 
@@ -182,14 +191,36 @@ export class Menus {
       <div class="ns-subtitle">Match still running</div>
       <button class="ns-btn primary ns-resume">Resume</button>
       <button class="ns-btn small danger ns-leave">Leave match</button>
-      <div class="ns-field" style="margin-top:22px"><label>Mouse sensitivity</label><input type="range" class="ns-sens" min="20" max="300" value="100" style="width:100%" /></div>
+      <div class="ns-field" style="margin-top:22px"><label>Look sensitivity (mouse &amp; touch)</label><input type="range" class="ns-sens" min="20" max="300" value="100" style="width:100%" /></div>
       <div class="ns-field"><label>Volume</label><input type="range" class="ns-vol" min="0" max="100" value="70" style="width:100%" /></div>
+      <div class="ns-field"><label>Touch controls</label>
+        <div class="ns-seg ns-touch-seg">
+          <button data-m="auto">Auto</button><button data-m="on">On</button><button data-m="off">Off</button>
+        </div>
+      </div>
     </div>`);
     this.sensSlider = p.querySelector('.ns-sens')!;
     this.volSlider = p.querySelector('.ns-vol')!;
     p.querySelector('.ns-resume')!.addEventListener('click', () => this.cb.onResume());
     p.querySelector('.ns-leave')!.addEventListener('click', () => this.cb.onLeaveToMenu());
+    const seg = p.querySelector('.ns-touch-seg')!;
+    this.touchSeg = seg as HTMLElement;
+    seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      const m = (b.dataset.m as TouchMode);
+      localStorage.setItem('ns_touch_mode', m);
+      this.cb.onTouchMode(m);
+    }));
     this.addPanel('pause', p);
+  }
+
+  private touchSeg!: HTMLElement;
+
+  /** reflect the stored touch-mode preference in the pause-menu segmented control */
+  initTouchSeg() {
+    const m = touchModePref();
+    this.touchSeg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
   }
 
   private buildEnd() {
@@ -221,7 +252,11 @@ export class Menus {
         <b>Mouse</b> aim &nbsp;&bull;&nbsp; <b>Left click</b> shoot (hold for auto) &nbsp;&bull;&nbsp; <span class="k">R</span> reload<br />
         <span class="k">TAB</span> scoreboard &nbsp;&bull;&nbsp; <span class="k">ESC</span> pause / release mouse<br /><br />
         <b>Headshots</b> deal double damage. Health regenerates after 5s out of combat.<br />
-        <b>Online:</b> create a match, share the room code with a friend, and start fragging. The match runs peer-to-peer (host is the scoreboard authority), so stay in the game until it ends.
+        <b>Online:</b> create a match, share the room code with a friend, and start fragging. The match runs peer-to-peer (host is the scoreboard authority), so stay in the game until it ends.<br /><br />
+        <b>Mobile &amp; tablets:</b> touch controls turn on automatically.<br />
+        Left stick moves (push fully forward to sprint) &bull; drag the right side of the screen to aim &bull;
+        <b>FIRE</b> shoots (hold for auto) &bull; a quick tap on the right side fires a single shot &bull;
+        <b>JUMP</b> / <b>RLD</b> buttons &bull; <b>II</b> pauses &bull; <b>LIST</b> shows the scoreboard.
       </div>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);

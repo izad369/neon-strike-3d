@@ -8,6 +8,7 @@ Play **offline** against AI bots, or **host / join peer-to-peer online matches**
 ## Features
 
 - **3D neon arena** — 80×80 symmetric map with cover walls, crates, pillars and a central platform, rendered with Three.js
+- **Mobile-ready touch controls** — dynamic left joystick, drag-to-aim, FIRE / JUMP / RELOAD buttons, tap-to-shoot, auto fullscreen & landscape prompt (works on Android & iOS, phones and tablets)
 - **Offline deathmatch** — 3 / 5 / 8 AI bots with patrol → hunt → combat behavior, three difficulty levels
 - **Online P2P multiplayer** — create a match, share the 5-letter room code, friends join straight from their browser (WebRTC via PeerJS, host-authoritative netcode, 12 Hz snapshots with interpolation)
 - **Full FPS kit** — hitscan rifle with recoil, spread, reload, headshots (2× damage), health regeneration, respawn system
@@ -26,6 +27,22 @@ Play **offline** against AI bots, or **host / join peer-to-peer online matches**
 | `R` | Reload |
 | `TAB` | Scoreboard |
 | `ESC` | Pause / release mouse |
+
+### Mobile (touch)
+
+Touch controls turn on automatically on phones/tablets (you can force them with `?touch=1` in the URL, or switch Auto/On/Off in the pause menu).
+
+| Touch input | Action |
+|---|---|
+| Left-side stick (appears where your thumb lands) | Move — push fully forward to sprint |
+| Drag on the right side | Aim |
+| **FIRE** button (hold) | Shoot (auto) |
+| Quick tap on the right side | Single shot |
+| **JUMP** / **RLD** buttons | Jump / Reload |
+| **II** button | Pause |
+| **LIST** button | Scoreboard |
+
+Holding the phone in landscape is recommended — the game asks to rotate if held in portrait and pauses the match on rotation. On Android the game also requests fullscreen + landscape lock when a match starts. Mobile devices get a lighter render preset (pixel-ratio cap, antialiasing off) for smooth framerates.
 
 Match rules: 5-minute deathmatch, first to 25 kills wins. Headshots deal double damage. Health regenerates after 5 s out of combat.
 
@@ -84,6 +101,7 @@ src/game/
   hud.ts          # injected CSS
   hudbar.ts       # HUD DOM overlay
   menus.ts        # menu system
+  touch.ts        # mobile touch controls (joystick, aim, buttons)
   net.ts          # PeerJS host/client
   main.ts         # orchestrator (offline / host / client)
   standalone.ts   # single-file build entry
@@ -94,4 +112,4 @@ scripts/
 ## Notes
 
 - Online mode uses PeerJS's free public signaling + Google STUN; the game data itself flows peer-to-peer. The host acts as the authority — keep the host tab open until the match ends.
-- Mobile is not supported (keyboard + mouse required).
+- Mobile browsers are fully supported for both offline and online play (WebRTC data channels work on modern Android Chrome and iOS Safari).

@@ -131,6 +131,57 @@ export function injectStyles() {
 @media (pointer: coarse) {
   .ns-mobile-note { display: block; margin-top: 14px; font-size: 13px; color: #ffb14d; }
 }
+.ns-mobile-note.ok { color: #39ff88; }
+
+/* ---------- Touch controls (mobile) ---------- */
+.ns-touch { position: absolute; inset: 0; z-index: 15; }
+.ns-touch-zone { position: absolute; touch-action: none; }
+.ns-zone-move { left: 0; bottom: 0; width: 45%; height: 75%; }
+.ns-zone-look { right: 0; bottom: 0; width: 55%; height: 100%; }
+.ns-joy { position: absolute; width: 124px; height: 124px; margin: -62px 0 0 -62px; border-radius: 50%;
+  border: 2px solid rgba(0,240,255,0.4); background: rgba(10,16,40,0.35); display: none; pointer-events: none; }
+.ns-joy-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%;
+  background: rgba(0,240,255,0.22); border: 2px solid rgba(0,240,255,0.75); box-shadow: 0 0 14px rgba(0,240,255,0.35); }
+.ns-tbtn { position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 50%;
+  font-family: 'Orbitron', sans-serif; font-weight: 700; letter-spacing: 1px; color: #bfe9ff;
+  background: rgba(10,16,40,0.5); border: 2px solid rgba(43,74,128,0.9);
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.ns-tbtn.on { border-color: #00f0ff; color: #00f0ff; box-shadow: 0 0 16px rgba(0,240,255,0.35); background: rgba(0,240,255,0.12); }
+.ns-tbtn.fire { right: 24px; bottom: 92px; width: 96px; height: 96px; font-size: 15px;
+  color: #ffdbe4; border-color: rgba(255,51,85,0.85); background: rgba(40,10,20,0.45); }
+.ns-tbtn.fire.on { border-color: #ff3355; color: #ff8fa3; box-shadow: 0 0 18px rgba(255,51,85,0.5); background: rgba(255,51,85,0.16); }
+.ns-tbtn.jump { right: 138px; bottom: 30px; width: 66px; height: 66px; font-size: 12px; }
+.ns-tbtn.reload { right: 34px; bottom: 204px; width: 58px; height: 58px; font-size: 11px; }
+.ns-tbtn.sb { left: 22px; top: 66px; width: 52px; height: 40px; border-radius: 8px; font-size: 10px; }
+.ns-tbtn.pause { left: 50%; margin-left: 86px; top: 12px; width: 46px; height: 46px; font-size: 13px; letter-spacing: 2px; }
+
+/* rotate-your-device overlay (touch mode + portrait only) */
+.ns-rotate { position: absolute; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center;
+  flex-direction: column; gap: 18px; background: rgba(5,7,18,0.95); text-align: center;
+  font-family: 'Orbitron', sans-serif; font-size: 16px; letter-spacing: 3px; color: #7df9ff; line-height: 1.8; }
+.ns-rotate span { font-size: 11px; color: #6d84b8; letter-spacing: 2px; }
+.ns-rotate-icon { width: 58px; height: 82px; border: 3px solid #7df9ff; border-radius: 10px;
+  animation: ns-rot 1.8s ease-in-out infinite; box-shadow: 0 0 18px rgba(0,240,255,0.25); }
+@keyframes ns-rot { 0%, 25% { transform: rotate(0deg); } 65%, 100% { transform: rotate(-90deg) scaleY(0.72); } }
+@media (orientation: portrait) {
+  .ns-touch:not(.ns-hidden) .ns-rotate { display: flex; }
+}
+
+/* HUD adjustments while touch controls are active */
+.ns-touch-mode .ns-root-canvas, .ns-touch-mode canvas { touch-action: none; }
+.ns-root.ns-touch-mode { touch-action: none; overscroll-behavior: none; -webkit-touch-callout: none; }
+.ns-root.ns-touch-mode .ns-ammo { right: 140px; bottom: 24px; }
+.ns-root.ns-touch-mode .ns-hp-wrap { bottom: 200px; width: 190px; left: 20px; }
+.ns-root.ns-touch-mode .ns-hint { display: none; }
+.ns-root.ns-touch-mode .ns-feed { top: 64px; right: 18px; max-width: 60vw; }
+@media (max-width: 760px) {
+  .ns-menu-inner { padding: 22px 18px; }
+  .ns-title { font-size: 38px; letter-spacing: 4px; }
+  .ns-ammo-num { font-size: 32px; }
+  .ns-timer-time { font-size: 20px; }
+  .ns-scoreboard { min-width: 0; width: 92vw; }
+  .ns-kd { font-size: 12px; padding: 5px 8px; }
+}
 `;
   const style = document.createElement('style');
   style.textContent = css;
