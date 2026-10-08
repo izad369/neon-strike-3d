@@ -1,4 +1,4 @@
-// NEON STRIKE 3D - main orchestrator: game states, modes (offline / host / client), loop
+// DESERT STRIKE 3D - main orchestrator: game states, modes (offline / host / client), loop
 import * as THREE from 'three';
 import { CFG, fmtTime, Difficulty, ClientMsg, HostMsg, SnapBot, SnapPlayer } from './constants';
 import { World } from './world';
@@ -13,6 +13,8 @@ import { NetHost, NetClient } from './net';
 import { injectStyles } from './hud';
 import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
+import { loadSoldier } from './assets';
+import { playerColor } from './avatar';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -462,7 +464,7 @@ class Game {
     const remoteId = mesh.userData.remoteId as string | undefined;
     const isEntity = botId || remoteId;
     if (isEntity) {
-      this.fx.sparks(hit.point, 0xff5577, 6);
+      this.fx.sparks(hit.point, 0xb03226, 6);
       this.audio.hit();
       this.hud.hitmarker(!!hit.headshot);
       const targetId = botId ?? remoteId!;
@@ -487,7 +489,7 @@ class Game {
   }
 
   private onBotShot(shot: BotShot) {
-    this.fx.tracer(shot.from, shot.to, 0xff7777);
+    this.fx.tracer(shot.from, shot.to, 0xff9c5b);
     if (!shot.targetId) return;
     if (this.mode === 'offline') {
       if (shot.targetId === this.myId) {
@@ -831,16 +833,19 @@ class Game {
 
 function r2(n: number): number { return Math.round(n * 100) / 100; }
 function botColor(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return new THREE.Color().setHSL((h % 360) / 360, 1, 0.55).getHex();
+  return playerColor(id);
 }
 
 export function mountGame(container: HTMLElement): () => void {
   injectStyles();
+  void loadSoldier(); // start fetching the soldier avatar immediately (menu covers load time)
   const root = document.createElement('div');
   root.className = 'ns-root';
   container.appendChild(root);
   const game = new Game(root);
+  // debug handle for automated testing only (opt-in via ?debug=1)
+  if (typeof location !== 'undefined' && location.search.includes('debug=1')) {
+    (globalThis as unknown as { __NS_DEBUG__?: unknown }).__NS_DEBUG__ = game;
+  }
   return () => game.dispose();
 }

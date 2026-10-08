@@ -55,14 +55,14 @@ export class RemotePlayer {
     this.group.position.copy(pos);
     this.group.rotation.y = yaw;
     this.muzzle.set(pos.x, pos.y + 1.1, pos.z);
-    // lean arms when shooting (cheap visual)
+    // small recoil dip when shooting (cheap visual, works for soldier & fallback)
     const shooting = b.s === 1;
-    if (shooting && !this.lastShooting) {
-      // small hop of gun arm
-      this.group.children[7].position.y = 0.84;
+    const body = this.group.userData.body as THREE.Object3D | undefined;
+    if (body) {
+      if (shooting && !this.lastShooting) body.position.y = -0.05;
+      body.position.y += (0 - body.position.y) * 0.2;
     }
     this.lastShooting = shooting;
-    this.group.children[7].position.y += (0.72 - this.group.children[7].position.y) * 0.2;
   }
 
   reset() {

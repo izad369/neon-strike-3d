@@ -177,8 +177,9 @@ export class Bot {
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
     const moving = Math.abs(this.vel.x) + Math.abs(this.vel.z) > 0.5;
-    this.group.children[0].position.y = 0.25 + Math.abs(Math.sin(now * 0.012)) * (moving ? 0.06 : 0);
-    this.group.children[1].position.y = 0.25 + Math.abs(Math.cos(now * 0.012)) * (moving ? 0.06 : 0);
+    // subtle walk bob on the visual body (soldier model or fallback)
+    const body = this.group.userData.body as THREE.Object3D | undefined;
+    if (body) body.position.y = moving ? Math.abs(Math.sin(now * 0.011)) * 0.05 : 0;
   }
 
   private currentTarget(targets: BotTarget[]): BotTarget | null {

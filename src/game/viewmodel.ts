@@ -1,4 +1,4 @@
-// NEON STRIKE 3D - first-person weapon viewmodel with recoil & sway
+// DESERT STRIKE 3D - first-person weapon viewmodel with recoil & sway
 import * as THREE from 'three';
 
 export class ViewModel {
@@ -13,9 +13,9 @@ export class ViewModel {
 
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
-    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x1b1f3a });
-    const accentMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-    const darkMat = new THREE.MeshLambertMaterial({ color: 0x10122a });
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x39372e });   // gunmetal olive
+    const accentMat = new THREE.MeshBasicMaterial({ color: 0xd6b96a });   // tan iron sights
+    const darkMat = new THREE.MeshLambertMaterial({ color: 0x26251f });   // dark polymer
 
     const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 0.5), bodyMat);
     receiver.position.set(0, 0, -0.1);

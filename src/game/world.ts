@@ -1,4 +1,4 @@
-// NEON STRIKE 3D - scene, neon arena map, collision & raycast helpers
+// DESERT STRIKE 3D - scene, desert military outpost map, collision & raycast helpers
 import * as THREE from 'three';
 import { CFG, COLORS } from './constants';
 
@@ -17,8 +17,8 @@ export class World {
   constructor(container: HTMLElement, opts?: { mobile?: boolean }) {
     const mobile = !!opts?.mobile;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(COLORS.dark);
-    this.scene.fog = new THREE.FogExp2(COLORS.dark, 0.014);
+    this.scene.background = new THREE.Color(COLORS.sky);
+    this.scene.fog = new THREE.FogExp2(COLORS.sky, 0.011);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 300);
     this.renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: 'high-performance' });
@@ -42,15 +42,15 @@ export class World {
   }
 
   private buildLights() {
-    this.scene.add(new THREE.HemisphereLight(0x8899ff, 0x1a1030, 0.85));
-    const dir = new THREE.DirectionalLight(0xbfd4ff, 0.7);
-    dir.position.set(30, 50, 20);
+    // harsh desert sun + warm bounce
+    this.scene.add(new THREE.HemisphereLight(0xfff3d6, 0x9a8a68, 1.0));
+    const dir = new THREE.DirectionalLight(0xffe4b8, 1.15);
+    dir.position.set(30, 55, 18);
     this.scene.add(dir);
-    // neon accents
-    const p1 = new THREE.PointLight(COLORS.cyan, 120, 60); p1.position.set(-22, 6, -22); this.scene.add(p1);
-    const p2 = new THREE.PointLight(COLORS.magenta, 120, 60); p2.position.set(22, 6, 22); this.scene.add(p2);
-    const p3 = new THREE.PointLight(COLORS.purple, 90, 50); p3.position.set(22, 6, -22); this.scene.add(p3);
-    const p4 = new THREE.PointLight(COLORS.orange, 90, 50); p4.position.set(-22, 6, 22); this.scene.add(p4);
+    // subtle warm fill from the opposite corner
+    const fill = new THREE.DirectionalLight(0xd8c8a8, 0.35);
+    fill.position.set(-24, 30, -26);
+    this.scene.add(fill);
   }
 
   private addBox(x: number, y: number, z: number, w: number, h: number, d: number, opts?: { glow?: number; solid?: boolean }) {
@@ -66,11 +66,11 @@ export class World {
         max: new THREE.Vector3(x + w / 2, y + h, z + d / 2),
       });
     }
-    // neon trim on top edge
+    // military trim on top edge (was neon glow)
     const glow = opts?.glow ?? COLORS.cyan;
     const trim = new THREE.Mesh(
       new THREE.BoxGeometry(w + 0.08, 0.1, d + 0.08),
-      new THREE.MeshBasicMaterial({ color: glow })
+      new THREE.MeshLambertMaterial({ color: glow })
     );
     trim.position.set(x, y + h + 0.02, z);
     this.scene.add(trim);
@@ -81,24 +81,24 @@ export class World {
     const A = CFG.arena, H = CFG.wallH, half = A / 2;
     const t = 1;
 
-    // floor
+    // floor (sand)
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(A, A),
-      new THREE.MeshLambertMaterial({ color: 0x0d1024 })
+      new THREE.MeshLambertMaterial({ color: 0xc7b183 })
     );
     floor.rotation.x = -Math.PI / 2;
     this.scene.add(floor);
-    const grid = new THREE.GridHelper(A, 40, COLORS.floorGrid, 0x131a33);
+    const grid = new THREE.GridHelper(A, 40, COLORS.floorGrid, 0x9c8a60);
     (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.55;
+    (grid.material as THREE.Material).opacity = 0.35;
     grid.position.y = 0.01;
     this.scene.add(grid);
 
-    // ceiling glow bars (decor)
+    // sandbag/beam decor lines over the arena (was neon ceiling bars)
     for (let i = -3; i <= 3; i++) {
       const bar = new THREE.Mesh(
-        new THREE.BoxGeometry(A - 8, 0.15, 0.5),
-        new THREE.MeshBasicMaterial({ color: i % 2 ? COLORS.purple : COLORS.cyan })
+        new THREE.BoxGeometry(A - 8, 0.18, 0.55),
+        new THREE.MeshLambertMaterial({ color: 0x6e5b40 })
       );
       bar.position.set(0, 11, i * 11);
       this.scene.add(bar);

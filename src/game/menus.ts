@@ -1,4 +1,4 @@
-// NEON STRIKE 3D - menu system (DOM)
+// DESERT STRIKE 3D - menu system (DOM)
 import { Difficulty } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
@@ -61,8 +61,8 @@ export class Menus {
 
   private buildMain() {
     const p = this.el(`<div>
-      <div class="ns-title">NEON STRIKE</div>
-      <div class="ns-subtitle">3D Arena FPS &mdash; Offline &amp; Online</div>
+      <div class="ns-title">DESERT STRIKE</div>
+      <div class="ns-subtitle">3D Military Arena FPS &mdash; Offline &amp; Online</div>
       <div class="ns-field"><label>Player name</label><input class="ns-input ns-name" maxlength="14" placeholder="ENTER NAME" /></div>
       <button class="ns-btn primary ns-b-offline">Play Offline &nbsp;(vs Bots)</button>
       <button class="ns-btn ns-b-online">Play Online &nbsp;(with Friends)</button>
@@ -315,6 +315,6 @@ export class Menus {
   }
 
   botNameFor(i: number): string {
-    return 'BOT ' + ['VEX', 'RAZOR', 'GHOST', 'TITAN', 'NOVA', 'BLAZE', 'ORION', 'FURY', 'KAIROS', 'STATIC', 'HYDRA', 'VOLT', 'ECHO', 'PULSAR'][i % 14];
+    return 'BOT ' + ['VIPER', 'RAVEN', 'GHOST', 'TITAN', 'COBRA', 'HAWK', 'RECON', 'SARGE', 'DIESEL', 'BRONCO', 'SABER', 'WOLF', 'MAVERICK', 'TOMBSTONE'][i % 14];
   }
 }

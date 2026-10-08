@@ -82,7 +82,7 @@ export class HUD {
     item.className = 'ns-feed-item' + (hs ? ' hs' : '');
     item.innerHTML = `<b>${esc(killer)}</b> ${hs ? '&#9733;' : '&#9656;'} <span class="vic">${esc(victim)}</span>`;
     this.feedEl.prepend(item);
-    if (involvingMe) item.style.borderColor = hs ? '#ff2bd6' : '#39ff88';
+    if (involvingMe) item.style.borderColor = hs ? '#e08a2e' : '#9fb86e';
     while (this.feedEl.children.length > 5) this.feedEl.lastChild?.remove();
     setTimeout(() => { item.style.opacity = '0'; item.style.transition = 'opacity 0.4s'; }, 4200);
     setTimeout(() => item.remove(), 4800);

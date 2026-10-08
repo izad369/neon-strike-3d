@@ -1,19 +1,21 @@
-# NEON STRIKE 3D
+# DESERT STRIKE 3D
 
-A fast, neon-styled 3D first-person shooter that runs entirely in your browser.
+A fast, desert-military 3D first-person shooter that runs entirely in your browser.
 Play **offline** against AI bots, or **host / join peer-to-peer online matches** with friends — no game server required.
 
-![Mode](https://img.shields.io/badge/modes-offline_%2B_online_P2P-00f0ff) ![Engine](https://img.shields.io/badge/engine-Three.js-8b5cf6) ![Deploy](https://img.shields.io/badge/deploy-Cloudflare_Pages-ff2bd6)
+![Mode](https://img.shields.io/badge/modes-offline_%2B_online_P2P-cdb27a) ![Engine](https://img.shields.io/badge/engine-Three.js-7d8f4e) ![Deploy](https://img.shields.io/badge/deploy-Cloudflare-d98e32)
 
 ## Features
 
-- **3D neon arena** — 80×80 symmetric map with cover walls, crates, pillars and a central platform, rendered with Three.js
+- **3D desert military outpost** — 80×80 symmetric map with adobe walls, sandbag lines, crates, pillars and a central platform, warm desert-sun lighting and hazy sand fog
+- **Real soldier avatars** — bots & remote players use a decimated (~23K tris) soldier GLB with camo texture, team-colored markers and nameplates (cheap invisible hitboxes keep raycasts fast; simple fallback avatar if the model can't load)
+- **Military theme** — khaki/olive/tan palette, Black Ops One stencil UI, warm tracer/spark effects
 - **Mobile-ready touch controls** — dynamic left joystick, drag-to-aim, FIRE / JUMP / RELOAD buttons, tap-to-shoot, auto fullscreen & landscape prompt (works on Android & iOS, phones and tablets)
-- **Offline deathmatch** — 3 / 5 / 8 AI bots with patrol → hunt → combat behavior, three difficulty levels
+- **Offline deathmatch** — 3 / 5 / 8 AI bots (VIPER, RAVEN, GHOST…) with patrol → hunt → combat behavior, three difficulty levels
 - **Online P2P multiplayer** — create a match, share the 5-letter room code, friends join straight from their browser (WebRTC via PeerJS, host-authoritative netcode, 12 Hz snapshots with interpolation)
 - **Full FPS kit** — hitscan rifle with recoil, spread, reload, headshots (2× damage), health regeneration, respawn system
 - **Game feel** — procedural WebAudio SFX (no audio files), muzzle flashes, tracers, impact sparks, hitmarkers, kill feed, scoreboard (TAB)
-- **Zero backend** — every mode works from static files; perfect for Cloudflare Pages, GitHub Pages, Netlify or itch.io
+- **Zero backend** — every mode works from static files; perfect for Cloudflare Pages/Workers, GitHub Pages, Netlify or itch.io
 
 ## Controls
 
@@ -92,6 +94,10 @@ npm run build:standalone   # -> dist/index.html + dist/neon-strike.html
 
 Then commit the updated `dist/` files (or drag-drop them).
 
+### Updating the soldier model
+
+Replace `public/soldier.glb` (any glTF 2.0 binary; it is auto-normalized to 1.8 units tall at load). For big source models decimate first — the pipeline used: `scripts/process_soldier.py` (fast-quadric decimation to ~23K tris, UV transfer, WebP texture kept).
+
 ## Tech stack
 
 - [Three.js](https://threejs.org) — rendering, physics helpers, raycasting
@@ -104,16 +110,17 @@ Then commit the updated `dist/` files (or drag-drop them).
 
 ```
 src/game/
-  constants.ts    # tuning, protocol, difficulty presets
+  constants.ts    # tuning, protocol, difficulty presets, desert palette
+  assets.ts       # soldier GLB loader (embedded base64 in dist / fetch in dev)
   audio.ts        # procedural SFX engine
-  world.ts        # scene, neon arena, collision, raycasts
+  world.ts        # scene, desert outpost, collision, raycasts
   effects.ts      # tracers, sparks, muzzle flash
   viewmodel.ts    # first-person rifle + recoil/sway
   player.ts       # local controls, physics, shooting
   bot.ts          # bot AI (patrol / hunt / combat)
   remote.ts       # remote entity interpolation
-  avatar.ts       # character mesh factory
-  hud.ts          # injected CSS
+  avatar.ts       # soldier avatar factory (GLB + markers + hit proxies)
+  hud.ts          # injected CSS (military theme)
   hudbar.ts       # HUD DOM overlay
   menus.ts        # menu system
   touch.ts        # mobile touch controls (joystick, aim, buttons)
@@ -121,7 +128,9 @@ src/game/
   main.ts         # orchestrator (offline / host / client)
   standalone.ts   # single-file build entry
 scripts/
-  build-standalone.mjs  # esbuild -> dist/neon-strike.html
+  build-standalone.mjs  # esbuild -> dist/index.html (embeds soldier.glb)
+public/
+  soldier.glb     # decimated soldier model (~23K tris, camo WebP texture)
 ```
 
 ## Notes

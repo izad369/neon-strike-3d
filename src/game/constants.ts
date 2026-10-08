@@ -1,4 +1,4 @@
-// NEON STRIKE 3D - shared constants & types
+// DESERT STRIKE 3D - shared constants & types
 export const CFG = {
   arena: 80, // square arena size
   wallH: 5,
@@ -28,21 +28,23 @@ export const CFG = {
 };
 
 export const COLORS = {
-  cyan: 0x00f0ff,
-  magenta: 0xff2bd6,
-  purple: 0x8b5cf6,
-  green: 0x39ff88,
-  orange: 0xffa02b,
-  red: 0xff3355,
-  yellow: 0xffe14d,
-  dark: 0x0a0a14,
-  floorGrid: 0x1e2a4a,
-  wallBase: 0x11142a,
+  // desert-military palette (keys kept for compatibility)
+  cyan: 0xbfa46f,      // generic sand-tan accent
+  magenta: 0x8a6d3b,   // dark khaki accent
+  purple: 0x6b7a53,    // olive accent
+  green: 0x7d8f4e,     // olive drab
+  orange: 0xd98e32,    // desert orange
+  red: 0xd23c2a,       // military red (danger)
+  yellow: 0xe6c35c,    // amber
+  dark: 0x1c1812,      // dark brown (menus boot)
+  sky: 0xd8caa2,       // hazy desert sky
+  floorGrid: 0xb3a077, // darker sand lines
+  wallBase: 0xa5946f,  // adobe/mud walls
 };
 
 export const BOT_NAMES = [
-  'VEX', 'RAZOR', 'GHOST', 'TITAN', 'NOVA', 'BLAZE', 'ORION', 'FURY',
-  'KAIROS', 'STATIC', 'HYDRA', 'VOLT', 'ECHO', 'PULSAR',
+  'VIPER', 'RAVEN', 'GHOST', 'TITAN', 'COBRA', 'HAWK', 'RECON', 'SARGE',
+  'DIESEL', 'BRONCO', 'SABER', 'WOLF', 'MAVERICK', 'TOMBSTONE',
 ];
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
