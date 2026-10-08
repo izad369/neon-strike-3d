@@ -1,0 +1,15 @@
+// Cloudflare Workers — static-assets-only config.
+// The deployable game is the PREBUILT single-file bundle in ./dist
+// (dist/index.html). No build step, no Next.js, no OpenNext needed.
+// Workers Builds deploy command:  npx wrangler deploy
+{
+  "name": "neon-strike-3d",
+  "compatibility_date": "2026-10-06",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

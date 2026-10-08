@@ -53,22 +53,32 @@ bun install        # or npm install
 bun run dev        # http://localhost:3000
 ```
 
-## Deploy to Cloudflare Pages
+## Deploy to Cloudflare
 
-The repo ships a **prebuilt, self-contained** `dist/index.html` (the entire game in one file, already committed). You do **not** need any build step on Cloudflare — this is the most reliable setup and avoids all npm/Next.js build errors.
+The repo ships a **prebuilt, self-contained** `dist/index.html` (the entire game in one file, already committed) **plus a committed `wrangler.jsonc`** that tells Cloudflare to serve `dist/` as static assets. No build step is needed on Cloudflare — this avoids all npm/Next.js/OpenNext build errors.
 
-### Option A — Git integration (auto-deploys on every push)
+### Option A — Cloudflare Workers with Git integration (recommended)
 
-1. [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Pages** → **Connect to Git** → select this repo
+1. [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Workers** → **Import a repository** → select this repo
+2. Leave the **Deploy command** as `npx wrangler deploy` (it reads the committed `wrangler.jsonc` and uploads `dist/` as static assets)
+3. Deploy — done. Every future `git push` redeploys automatically.
+
+> The committed `wrangler.jsonc` is a static-assets-only config. Wrangler will NOT try to detect Next.js or run the OpenNext migration, because the config file already exists.
+
+> ⚠️ If you previously saw `Service binding 'WORKER_SELF_REFERENCE' references Worker 'nextjs-tailwind-shadcn-ts' which was not found [code: 10143]` — that happened because there was no `wrangler.jsonc`, so `wrangler deploy` auto-detected the Next.js scaffold and tried to deploy it via OpenNext with a mismatched worker name. This is fixed by the committed config; just retry the deployment.
+
+### Option B — Cloudflare Pages with Git integration
+
+1. **Workers & Pages** → **Create** → **Pages** → **Connect to Git** → select this repo
 2. In **Build settings** enter exactly:
    - Framework preset: **None**
    - Build command: **(leave empty)**
    - Build output directory: **`dist`**
-3. **Save and Deploy** — done. Every future `git push` redeploys automatically.
+3. **Save and Deploy**.
 
-> ⚠️ Do **not** pick the "Next.js" framework preset. The Next.js part of this repo is only a dev host — `@cloudflare/next-on-pages` does not support Next 16, and there is no `package-lock.json` (only `bun.lock`), so any npm-based build will fail. The deployable game is the static `dist/` folder.
+> ⚠️ Do **not** pick the "Next.js" framework preset. The Next.js part of this repo is only a dev host — the deployable game is the static `dist/` folder.
 
-### Option B — Drag & drop (no Git at all)
+### Option C — Drag & drop (no Git at all)
 
 1. **Workers & Pages** → **Create** → **Pages** → **Upload assets**
 2. Drag `dist/index.html` in and deploy — done.
