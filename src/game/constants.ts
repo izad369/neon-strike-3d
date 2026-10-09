@@ -44,15 +44,40 @@ export const CFG = {
   survivalMaxAlive: 9,  // concurrent bots cap
   survivalIntermission: 5, // seconds between waves
   gunGameTime: 360,     // 6 minutes
+  // duel
+  duelRounds: 3,        // first to 3 round wins
+  duelRespawn: 2.2,     // seconds between duel rounds
+  // battle royale
+  brArena: 170,         // warzone map size
+  brAllies: 2,          // allied bots on player's squad
+  brEnemySquads: 4,     // enemy squads
+  brSquadSize: 3,       // bots per enemy squad
+  brPlaneY: 130,        // plane altitude
+  brZoneStart: 82,      // initial zone radius
+  brZoneMin: 12,        // final zone radius
+  brZonePhaseSec: 55,   // seconds per shrink phase
+  brZoneHoldSec: 20,    // hold between phases
+  brLootCount: 110,     // loot spawns on the warzone map
+  brDmgBase: 5,         // zone dps at phase 0
 };
 
 /** offline game modes (online play is always deathmatch) */
-export type GameMode = 'dm' | 'tdm' | 'survival' | 'gun';
+export type GameMode = 'dm' | 'tdm' | 'survival' | 'gun' | 'duel' | 'br';
 export const MODE_LABEL: Record<GameMode, string> = {
   dm: 'DEATHMATCH',
   tdm: 'TEAM DEATHMATCH',
   survival: 'SURVIVAL',
   gun: 'GUN GAME',
+  duel: 'DUEL',
+  br: 'BATTLE ROYALE',
+};
+
+/** playable maps (battle royale always uses 'warzone') */
+export type MapId = 'outpost' | 'urban' | 'oasis';
+export const MAP_LABEL: Record<MapId, string> = {
+  outpost: 'DESERT OUTPOST',
+  urban: 'URBAN BLOCKS',
+  oasis: 'DRY OASIS',
 };
 
 export const COLORS = {
@@ -88,23 +113,39 @@ export const DIFFICULTY: Record<Difficulty, {
 
 export type Vec3Arr = [number, number, number];
 
+/** safe-zone circle (battle royale) — bots & clients receive a subset of this */
+export type ZoneInfo = { cx: number; cz: number; r: number; phase: number };
+
+/** loot entry sent to clients at match init: [id, kind, x, y, z] */
+export type LootInit = [number, LootKind, number, number, number];
+
 // ---- Network protocol (PeerJS, host authoritative) ----
 export type ClientMsg =
   | { t: 'hi'; name: string }
   | { t: 'st'; p: Vec3Arr; y: number; x: number; m: 0 | 1; s: 0 | 1; hp: number } // pos, yaw, pitch, moving, shooting
   | { t: 'hit'; tg: string; hs: 0 | 1; o: Vec3Arr; d: Vec3Arr }
+  | { t: 'loot'; i: number } // BR: client picked up loot id
   | { t: 'bye' };
 
 export type SnapPlayer = { i: string; p: Vec3Arr; y: number; x: number; m: 0 | 1; s: 0 | 1; hp: number; n: string };
 export type SnapBot = { i: string; p: Vec3Arr; y: number; hp: number; st: number };
 export type HostMsg =
-  | { t: 'init'; id: string; cfg: { bots: number; diff: Difficulty }; tm: number; sc: Record<string, [number, number]>; names: Record<string, string> }
-  | { t: 'snap'; tm: number; pl: SnapPlayer[]; bt: SnapBot[]; sc: Record<string, [number, number]> }
+  | { t: 'init'; id: string; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId; loot?: LootInit[] }; tm: number; sc: Record<string, [number, number]>; names: Record<string, string> }
+  | { t: 'snap'; tm: number; pl: SnapPlayer[]; bt: SnapBot[]; sc: Record<string, [number, number]>; zn?: [number, number, number, number] } // cx,cz,r,phase
   | { t: 'ev'; k: 'kill'; v: string; b: string; hs: boolean } // victim, by
   | { t: 'ev'; k: 'spawn'; i: string; p: Vec3Arr }
   | { t: 'ev'; k: 'dmg'; i: string; amt: number }
+  | { t: 'ev'; k: 'loot'; i: number } // BR: loot id was taken
   | { t: 'ev'; k: 'end'; board: [string, string, number, number][] } // [id, name, kills, deaths]
-  | { t: 'ev'; k: 'start'; cfg: { bots: number; diff: Difficulty } };
+  | { t: 'ev'; k: 'start'; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId } };
+
+/** BR loot kinds: weapon slot indexes 1..6 plus supplies */
+export type LootKind = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'w6' | 'ammo' | 'med' | 'vest';
+
+export const LOOT_LABEL: Record<LootKind, string> = {
+  w1: 'M9 SIDEARM', w2: 'MP5 SMG', w3: 'M870 SHOTGUN', w4: 'M4A1 RIFLE',
+  w5: 'MK14 DMR', w6: 'M249 LMG', ammo: 'AMMO BOX', med: 'MEDKIT +50', vest: 'ARMOR VEST',
+};
 
 export const NET_PREFIX = 'ns3d-match-';
 

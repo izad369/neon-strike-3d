@@ -1,7 +1,7 @@
 // DESERT STRIKE 3D - main orchestrator: game states, modes (offline / host / client),
-// offline game modes (DM / TDM / Survival / Gun Game), forced-landscape layout
+// game modes (DM / TDM / Survival / Gun Game / Duel / Battle Royale), maps, forced-landscape layout
 import * as THREE from 'three';
-import { CFG, fmtTime, Difficulty, ClientMsg, HostMsg, SnapBot, SnapPlayer, GameMode, MODE_LABEL } from './constants';
+import { CFG, fmtTime, Difficulty, ClientMsg, HostMsg, SnapBot, SnapPlayer, GameMode, MODE_LABEL, MapId, LootKind, LootInit, LOOT_LABEL, ZoneInfo } from './constants';
 import { World } from './world';
 import { AudioFX } from './audio';
 import { Effects } from './effects';
@@ -65,6 +65,25 @@ class Game {
   private survEnding = false;
   private lastWaveAlive = 0;
 
+  // battle royale state
+  private brZone: (ZoneInfo & {
+    hold: number; shrinking: boolean; t: number;
+    from: { cx: number; cz: number; r: number };
+    to: { cx: number; cz: number; r: number };
+  }) | null = null;
+  private brZoneMesh: THREE.Mesh | null = null;
+  private brZoneRing: THREE.Mesh | null = null;
+  private brZoneDmgAt = 0;
+  private brCheckAt = 0;
+  private loots = new Map<number, { kind: LootKind; pos: THREE.Vector3; mesh: THREE.Mesh; taken: boolean }>();
+  private lootSeq = 1;
+  private brPlane: THREE.Group | null = null;
+  private zoneSync: ZoneInfo | null = null; // client: zone from host snapshots
+  // duel state
+  private duelScore: [number, number] = [0, 0];
+  private duelRound = 1;
+  private duelWaitUntil = 0;
+
   private lastSnapSent = 0;
   private lastInputSent = 0;
   private respawnDeadline = 0;
@@ -84,8 +103,8 @@ class Game {
       onScoreboard: (show) => this.showScoreboard(show),
     });
     this.menus = new Menus(root, {
-      onStartOffline: (name, bots, diff, mode) => this.startOffline(name, bots, diff, mode),
-      onHost: (name, bots, diff) => this.startHost(name, bots, diff),
+      onStartOffline: (name, bots, diff, mode, map) => this.startOffline(name, bots, diff, mode, map),
+      onHost: (name, bots, diff, mode, map) => this.startHost(name, bots, diff, mode, map),
       onJoin: (name, code) => this.joinMatch(name, code),
       onResume: () => this.resume(),
       onLeaveToMenu: () => this.leaveToMenu(),
@@ -136,6 +155,19 @@ class Game {
     this.hostRespawns.clear();
     this.prevShootFlags.clear();
     this.fx.clear();
+    this.clearBrVisuals();
+    this.duelScore = [0, 0]; this.duelRound = 1; this.duelWaitUntil = 0;
+    this.brZone = null; this.zoneSync = null;
+    this.hud.setZoneWarn(false);
+  }
+
+  /** remove every battle-royale visual (zone cylinder, ring, plane, loot boxes) */
+  private clearBrVisuals() {
+    if (this.brZoneMesh) { this.world.scene.remove(this.brZoneMesh); this.brZoneMesh = null; }
+    if (this.brZoneRing) { this.world.scene.remove(this.brZoneRing); this.brZoneRing = null; }
+    if (this.brPlane) { this.world.scene.remove(this.brPlane); this.brPlane = null; }
+    this.loots.forEach(l => this.world.scene.remove(l.mesh));
+    this.loots.clear();
   }
 
   private setupLocal(name: string) {
@@ -206,6 +238,8 @@ class Game {
     this.paused = false;
     this.menus.show(null);
     this.hud.show(true);
+    this.hud.showRespawn(false);
+    this.hud.setZoneWarn(false);
     this.hud.setRoom(this.mode === 'host' ? `ROOM ${this.host?.code ?? ''}` : this.mode === 'client' ? `ROOM ${this.clientRoom}` : '');
     this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
     this.enterTouchUI();
@@ -217,7 +251,7 @@ class Game {
     return (window.visualViewport?.height ?? window.innerHeight) > (window.visualViewport?.width ?? window.innerWidth);
   }
 
-  private startOffline(name: string, botCount: number, diff: Difficulty, mode: GameMode) {
+  private startOffline(name: string, botCount: number, diff: Difficulty, mode: GameMode, map: MapId) {
     this.audio.resume();
     this.cleanupNet();
     this.resetWorldEntities();
@@ -225,6 +259,7 @@ class Game {
     this.myId = '1';
     this.diff = diff;
     this.gameMode = mode;
+    this.world.setMap(mode === 'br' ? 'warzone' : map);
     this.setupLocal(name);
     this.initModeState(botCount);
     this.hud.setKD(0, 0);
@@ -251,6 +286,15 @@ class Game {
       this.matchTime = CFG.gunGameTime;
       for (let i = 0; i < 5; i++) this.addBot(this.diff, { idx: i });
       this.player.switchWeapon(GUN_GAME_LADDER[0], true);
+    } else if (this.gameMode === 'duel') {
+      this.matchTime = 9999 * 60;
+      this.duelScore = [0, 0]; this.duelRound = 1; this.duelWaitUntil = 0;
+      const bot = this.addBot(this.diff, { noRespawn: true });
+      bot.spawnAt(this.world.pickSpawn([this.player.pos]));
+      this.hud.toast('DUEL — FIRST TO 3 ROUNDS', 2600);
+    } else if (this.gameMode === 'br') {
+      this.matchTime = 9999 * 60;
+      this.setupBR();
     } else {
       this.matchTime = CFG.matchTime;
       for (let i = 0; i < botCount; i++) this.addBot(this.diff, { idx: i });
@@ -259,18 +303,20 @@ class Game {
 
   private addBot(diff: Difficulty, opts?: { team?: number; idx?: number; hpScale?: number; dmgScale?: number; noRespawn?: boolean }) {
     const idx = opts?.idx ?? this.bots.size;
-    const id = 'b' + (this.bots.size + 1);
     const name = this.menus.botNameFor(idx);
-    // TDM: team colors (olive allies / red enemies). DM: per-bot marker palette.
+    // TDM/BR: team colors (olive allies / red enemies). DM: per-bot marker palette.
     const color = opts?.team !== undefined
       ? (opts.team === 0 ? 0x7d8f4e : 0xb0432a)
-      : botColor(id);
+      : botColor('b' + (idx + 1));
     const bot = new Bot(name, color, diff, this.world, this.audio, shot => this.onBotShot(shot), {
       team: opts?.team ?? -1,
       hpScale: opts?.hpScale,
       dmgScale: opts?.dmgScale,
       noRespawn: opts?.noRespawn,
     });
+    const id = bot.id; // FIX: key every map by the bot's real id — its hit meshes carry
+    //                      userData.botId = bot.id, so a mismatch made enemies unkillable
+    //                      after restarting with a different mode/difficulty.
     bot.spawnAt(this.world.pickSpawn(this.alivePositions()));
     this.world.scene.add(bot.group);
     this.bots.set(id, bot);
@@ -311,17 +357,239 @@ class Game {
     this.player.hp = Math.min(CFG.playerHp, this.player.hp + 30);
   }
 
+  // ================= battle royale =================
+
+  /** BR setup: squads, safe zone, loot, plane drop (offline + host; clients get state via net) */
+  private setupBR() {
+    // squads: player + allies vs enemy squads
+    for (let i = 0; i < CFG.brAllies; i++) this.addBot(this.diff, { team: 0, idx: i, noRespawn: true });
+    for (let s = 0; s < CFG.brEnemySquads; s++) {
+      for (let m = 0; m < CFG.brSquadSize; m++) {
+        this.addBot(this.diff, { team: s + 1, idx: CFG.brAllies + s * CFG.brSquadSize + m, noRespawn: true });
+      }
+    }
+    // initial safe zone near the middle of the map
+    const a = Math.random() * Math.PI * 2, d0 = Math.random() * 16;
+    this.brZone = {
+      cx: Math.cos(a) * d0, cz: Math.sin(a) * d0, r: CFG.brZoneStart, phase: 0,
+      hold: performance.now() + (CFG.brZoneHoldSec + 12) * 1000,
+      shrinking: false, t: 0,
+      from: { cx: 0, cz: 0, r: 0 }, to: { cx: 0, cz: 0, r: 0 },
+    };
+    this.buildZoneMeshes();
+    // loot: offline/host spawn locally — clients receive the list in 'init'
+    if (this.mode !== 'client') this.spawnLoot();
+    // plane drop: everyone starts high in the air
+    const airDrop = () => new THREE.Vector3((Math.random() * 2 - 1) * 60, CFG.brPlaneY, (Math.random() * 2 - 1) * 60);
+    this.player.spawnAt(airDrop());
+    this.player.setBrLoadout();
+    this.player.parachute = true;
+    this.bots.forEach(b => { const p = airDrop(); p.y = CFG.brPlaneY - Math.random() * 14; b.spawnAt(p); });
+    this.spawnPlane();
+    this.hud.toast('BATTLE ROYALE — JUMP!', 2600);
+  }
+
+  private buildZoneMeshes() {
+    if (this.brZoneMesh || this.brZoneRing) return;
+    this.brZoneMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 90, 48, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xd2691e, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false })
+    );
+    this.brZoneRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.975, 1, 72),
+      new THREE.MeshBasicMaterial({ color: 0xff8a3c, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })
+    );
+    this.brZoneRing.rotation.x = -Math.PI / 2;
+    this.world.scene.add(this.brZoneMesh, this.brZoneRing);
+  }
+
+  /** cheap cargo plane that flies over the drop zone at match start */
+  private spawnPlane() {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshLambertMaterial({ color: 0x707a6a });
+    const fus = new THREE.Mesh(new THREE.BoxGeometry(15, 2.4, 2.6), mat);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.4, 22), mat); wing.position.y = 0.7;
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.2, 0.4), mat); tail.position.set(-6.8, 2, 0);
+    const tailW = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 6.5), mat); tailW.position.set(-7, 1.6, 0);
+    g.add(fus, wing, tail, tailW);
+    g.position.set(-170, CFG.brPlaneY + 14, this.player.pos.z);
+    this.world.scene.add(g);
+    this.brPlane = g;
+  }
+
+  private updateZoneVisuals() {
+    const z = this.mode === 'client' ? this.zoneSync : this.brZone;
+    if (!z || !this.brZoneMesh || !this.brZoneRing) return;
+    this.brZoneMesh.position.set(z.cx, 45, z.cz);
+    this.brZoneMesh.scale.set(z.r, 1, z.r);
+    this.brZoneRing.position.set(z.cx, 0.15, z.cz);
+    this.brZoneRing.scale.set(z.r, z.r, 1);
+  }
+
+  /** zone shrink + damage — simulated on the host / offline game only */
+  private updateZoneLogic(now: number) {
+    const z = this.brZone;
+    if (!z) return;
+    if (!z.shrinking && now >= z.hold && z.r > CFG.brZoneMin) {
+      z.phase++;
+      z.shrinking = true; z.t = now;
+      z.from = { cx: z.cx, cz: z.cz, r: z.r };
+      const nr = Math.max(CFG.brZoneMin, z.r * 0.62);
+      const maxOff = Math.max(0, z.r - nr);
+      const a = Math.random() * Math.PI * 2, off = Math.random() * maxOff;
+      z.to = { cx: z.cx + Math.cos(a) * off, cz: z.cz + Math.sin(a) * off, r: nr };
+      this.hud.toast(`ZONE ${z.phase} CLOSING IN`, 2000);
+      this.audio.zoneWarn();
+    }
+    if (z.shrinking) {
+      const k = Math.min(1, (now - z.t) / (CFG.brZonePhaseSec * 1000));
+      const e = k * k * (3 - 2 * k);
+      z.cx = THREE.MathUtils.lerp(z.from.cx, z.to.cx, e);
+      z.cz = THREE.MathUtils.lerp(z.from.cz, z.to.cz, e);
+      z.r = THREE.MathUtils.lerp(z.from.r, z.to.r, e);
+      if (k >= 1) { z.shrinking = false; z.hold = now + CFG.brZoneHoldSec * 1000; }
+    }
+    // timer slot shows the zone countdown
+    this.matchTime = z.shrinking
+      ? Math.max(0, (z.t + CFG.brZonePhaseSec * 1000 - now) / 1000)
+      : Math.max(0, (z.hold - now) / 1000);
+    // zone damage tick (2 Hz)
+    if (now >= this.brZoneDmgAt) {
+      this.brZoneDmgAt = now + 500;
+      const dmg = CFG.brDmgBase * (z.phase + 1) * 0.5;
+      if (this.player.alive && Math.hypot(this.player.pos.x - z.cx, this.player.pos.z - z.cz) > z.r) {
+        const died = this.player.takeDamage(dmg, now);
+        this.hud.damageFlash();
+        if (died) this.afterDamage(this.myId, this.myId, 'THE ZONE', false, true);
+      }
+      this.bots.forEach((b, id) => {
+        if (!b.alive || b.pos.y > 3) return;
+        if (Math.hypot(b.pos.x - z.cx, b.pos.z - z.cz) > z.r) {
+          const died = b.takeDamage(dmg, now, b.pos.clone());
+          if (died) this.afterDamage(id, id, 'THE ZONE', false, true);
+        }
+      });
+      // remote humans take their own zone damage client-side; their deaths arrive via 'st' hp<=0
+    }
+  }
+
+  /** horizontal distance outside the safe zone (BR), null when not in BR */
+  private zoneDist(): number | null {
+    const z = this.mode === 'client' ? this.zoneSync : this.brZone;
+    if (!z) return null;
+    return Math.hypot(this.player.pos.x - z.cx, this.player.pos.z - z.cz) - z.r;
+  }
+
+  private brAliveEnemies(): number {
+    let n = 0;
+    this.bots.forEach(b => { if (b.alive && b.team > 0) n++; });
+    return n;
+  }
+
+  private brAliveAllies(): number {
+    let n = this.player.alive ? 1 : 0;
+    this.bots.forEach(b => { if (b.alive && b.team === 0) n++; });
+    if (this.mode === 'host') this.remotes.forEach(r => { if (r.alive) n++; });
+    return n;
+  }
+
+  /** squads still in the game when the player's squad falls (placement) */
+  private brPlacement(): number {
+    const teams = new Set<number>();
+    this.bots.forEach(b => { if (b.alive && b.team > 0) teams.add(b.team); });
+    return teams.size + 1;
+  }
+
+  private checkBREnd(now: number) {
+    if (this.gameMode !== 'br' || this.mode === 'client' || this.state !== 'playing') return;
+    if (now < this.brCheckAt) return;
+    this.brCheckAt = now + 700;
+    if (this.brAliveEnemies() === 0 || this.brAliveAllies() === 0) this.endMatch();
+  }
+
+  // ================= loot (battle royale) =================
+
+  private rollLoot(): LootKind {
+    let r = Math.random() * 100;
+    for (const [k, w] of LOOT_TABLE) { if ((r -= w) <= 0) return k; }
+    return 'ammo';
+  }
+
+  private makeLootMesh(kind: LootKind): THREE.Mesh {
+    if (!lootGeo) lootGeo = new THREE.BoxGeometry(0.36, 0.36, 0.36);
+    let mat = lootMats.get(kind);
+    if (!mat) { mat = new THREE.MeshBasicMaterial({ color: LOOT_COLORS[kind] }); lootMats.set(kind, mat); }
+    const mesh = new THREE.Mesh(lootGeo, mat);
+    if (kind.startsWith('w')) mesh.scale.setScalar(1.3);
+    return mesh;
+  }
+
+  /** scatter loot over the warzone loot anchors (offline + host) */
+  private spawnLoot() {
+    this.clearLoot();
+    for (const p of this.world.lootSpots) {
+      const kind = this.rollLoot();
+      const id = this.lootSeq++;
+      const mesh = this.makeLootMesh(kind);
+      mesh.position.set(p.x, 0.55, p.z);
+      this.world.scene.add(mesh);
+      this.loots.set(id, { kind, pos: p.clone(), mesh, taken: false });
+    }
+  }
+
+  /** clients: build loot from the host's init list */
+  private spawnLootFromList(list: LootInit[]) {
+    this.clearLoot();
+    for (const [id, kind, x, , z] of list) {
+      const mesh = this.makeLootMesh(kind);
+      mesh.position.set(x, 0.55, z);
+      this.world.scene.add(mesh);
+      this.loots.set(id, { kind, pos: new THREE.Vector3(x, 0, z), mesh, taken: false });
+    }
+  }
+
+  private clearLoot() {
+    this.loots.forEach(l => this.world.scene.remove(l.mesh));
+    this.loots.clear();
+  }
+
+  private applyLoot(kind: LootKind) {
+    if (kind === 'ammo') this.player.refillCurrent();
+    else if (kind === 'med') this.player.heal(50);
+    else if (kind === 'vest') this.player.armor = 100;
+    else this.player.giveWeapon(parseInt(kind[1], 10) - 1);
+  }
+
+  /** walk-over pickup (auto) — local player, any non-client mode or optimistic on client */
+  private tryLootPickup() {
+    if (this.gameMode !== 'br' || !this.player.alive || this.player.pos.y > 1.2) return;
+    const p = this.player.pos;
+    this.loots.forEach((l, id) => {
+      if (l.taken) return;
+      if (Math.abs(l.pos.x - p.x) < 1.15 && Math.abs(l.pos.z - p.z) < 1.15) {
+        l.taken = true;
+        this.world.scene.remove(l.mesh);
+        this.applyLoot(l.kind);
+        this.audio.pickup();
+        this.hud.toast(LOOT_LABEL[l.kind], 950);
+        if (this.mode === 'host') this.host?.broadcast({ t: 'ev', k: 'loot', i: id } as HostMsg);
+        else if (this.mode === 'client') this.client?.send({ t: 'loot', i: id });
+      }
+    });
+  }
+
   // ---- host (online) ----
   private clientRoom = '';
 
-  private startHost(name: string, botCount: number, diff: Difficulty) {
+  private startHost(name: string, botCount: number, diff: Difficulty, gameMode: GameMode, map: MapId) {
     this.audio.resume();
     this.cleanupNet();
     this.resetWorldEntities();
     this.mode = 'host';
     this.myId = '1';
     this.diff = diff;
-    this.gameMode = 'dm'; // online stays deathmatch
+    this.gameMode = gameMode === 'br' ? 'br' : 'dm'; // online: DM or co-op Battle Royale
+    this.world.setMap(this.gameMode === 'br' ? 'warzone' : map);
     this.setupLocal(name);
     this.initModeState(botCount);
     this.menus.show('lobby');
@@ -370,8 +638,14 @@ class Game {
       this.names.forEach((n, i) => { namesObj[i] = n; });
       const scObj: Record<string, [number, number]> = {};
       this.scores.forEach((s, i) => { scObj[i] = [s.k, s.d]; });
+      // BR co-op: every human joins the host's squad
+      if (this.gameMode === 'br') this.teams.set(id, 0);
+      const lootList: LootInit[] = this.gameMode === 'br'
+        ? [...this.loots.entries()].filter(([, l]) => !l.taken)
+          .map(([lid, l]) => [lid, l.kind, r2(l.pos.x), r2(l.pos.y), r2(l.pos.z)] as LootInit)
+        : [];
       this.host!.send(conn as never, {
-        t: 'init', id, cfg: { bots: this.bots.size, diff: this.diff },
+        t: 'init', id, cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId, loot: lootList },
         tm: this.state === 'playing' ? this.matchTime : CFG.matchTime, sc: scObj, names: namesObj,
       } as HostMsg);
       if (this.state === 'playing') {
@@ -385,7 +659,11 @@ class Game {
     const rp = this.remotes.get(id);
     if (msg.t === 'st' && rp) {
       rp.applySnap({ i: id, p: msg.p, y: msg.y, x: msg.x, m: msg.m, s: msg.s, hp: msg.hp, n: this.names.get(id) ?? 'PLAYER' }, performance.now());
-      if (msg.hp <= 0 && rp.alive) { /* host will handle via damage application path */ }
+      // zone / fall deaths arrive here: client hp hit 0 but no killer was reported
+      if (msg.hp <= 0 && rp.alive) {
+        rp.hp = 0; rp.alive = false;
+        this.afterDamage(id, id, this.names.get(id) ?? 'PLAYER', false, true);
+      }
       if (msg.s === 1 && this.prevShootFlags.get(id) !== true) {
         this.audio.remoteShoot();
         this.fx.tracer(new THREE.Vector3(msg.p[0], msg.p[1] + 1.1, msg.p[2]),
@@ -394,6 +672,13 @@ class Game {
       this.prevShootFlags.set(id, msg.s === 1);
     } else if (msg.t === 'hit') {
       this.applyClientHit(id, msg.tg, msg.hs === 1, new THREE.Vector3(...msg.o), new THREE.Vector3(...msg.d));
+    } else if (msg.t === 'loot') {
+      const l = this.loots.get(msg.i);
+      if (l && !l.taken) {
+        l.taken = true;
+        this.world.scene.remove(l.mesh);
+        this.host!.broadcast({ t: 'ev', k: 'loot', i: msg.i } as HostMsg);
+      }
     } else if (msg.t === 'bye') {
       this.removeRemote(id);
     }
@@ -465,13 +750,21 @@ class Game {
       this.names = new Map(Object.entries(msg.names));
       this.scores = new Map(Object.entries(msg.sc).map(([k, v]) => [k, { k: v[0], d: v[1] }]));
       this.matchTime = msg.tm;
+      this.diff = msg.cfg.diff;
+      this.gameMode = msg.cfg.mode ?? 'dm';
+      if (msg.cfg.map) this.world.setMap(msg.cfg.map);
+      if (msg.cfg.loot) this.spawnLootFromList(msg.cfg.loot);
+      if (this.gameMode === 'br') this.buildZoneMeshes();
       this.player.spawnAt(new THREE.Vector3(0, 0, 30));
       this.player.enabled = false;
       return;
     }
     if (msg.t === 'ev' && msg.k === 'start') {
       this.diff = msg.cfg.diff;
-      this.matchTime = CFG.matchTime;
+      this.gameMode = msg.cfg.mode ?? this.gameMode;
+      if (msg.cfg.map) this.world.setMap(msg.cfg.map);
+      if (this.gameMode === 'br') this.buildZoneMeshes();
+      this.matchTime = this.gameMode === 'br' ? 9999 * 60 : CFG.matchTime;
       this.scores.forEach(s => { s.k = 0; s.d = 0; });
       this.state = 'playing';
       this.menus.show(null);
@@ -516,6 +809,7 @@ class Game {
       const scObj = msg.sc;
       this.scores.forEach((s, i) => { if (scObj[i]) { s.k = scObj[i][0]; s.d = scObj[i][1]; } });
       this.hud.setKD(this.scores.get(this.myId)?.k ?? 0, this.scores.get(this.myId)?.d ?? 0);
+      if (msg.zn) this.zoneSync = { cx: msg.zn[0], cz: msg.zn[1], r: msg.zn[2], phase: msg.zn[3] };
       return;
     }
     if (msg.t === 'ev') {
@@ -531,6 +825,9 @@ class Game {
           this.player.applyServerDamage(msg.amt);
           this.hud.damageFlash();
         }
+      } else if (msg.k === 'loot') {
+        const l = this.loots.get(msg.i);
+        if (l && !l.taken) { l.taken = true; this.world.scene.remove(l.mesh); }
       } else if (msg.k === 'end') {
         this.state = 'end';
         this.expectUnlock = true;
@@ -610,8 +907,8 @@ class Game {
   private onBotShot(shot: BotShot) {
     this.fx.tracer(shot.from, shot.to, 0xff9c5b);
     if (!shot.targetId) return;
-    // TDM: bots never target teammates, but guard anyway
-    if (this.gameMode === 'tdm' && this.teams.get(shot.targetId) !== undefined
+    // team modes: bots never target teammates, but guard anyway
+    if ((this.gameMode === 'tdm' || this.gameMode === 'br') && this.teams.get(shot.targetId) !== undefined
         && this.teams.get(shot.targetId) === this.bots.get(this.shooterBotId(shot))?.team) return;
     if (this.mode === 'offline') {
       if (shot.targetId === this.myId) {
@@ -674,7 +971,7 @@ class Game {
     if (victimId === this.myId) this.onLocalDeath();
     this.host?.broadcast({ t: 'ev', k: 'kill', v: victimId, b: killerId, hs } as HostMsg);
     // schedule respawn for victim humans (bots auto-respawn internally)
-    if (this.mode === 'host' && this.remotes.has(victimId)) {
+    if (this.mode === 'host' && this.remotes.has(victimId) && this.gameMode !== 'br') {
       const rp = this.remotes.get(victimId)!;
       rp.hp = 0; rp.alive = false;
       this.hostRespawns.set(victimId, performance.now() + CFG.respawnDelay * 1000);
@@ -682,6 +979,11 @@ class Game {
     if (this.mode !== 'client' && this.gameMode === 'dm' && killerId !== victimId
         && this.scores.get(killerId) && this.scores.get(killerId)!.k >= CFG.targetKills) {
       this.endMatch(); return;
+    }
+    if (this.mode === 'offline' && this.gameMode === 'duel' && died) {
+      if (victimId === this.myId) this.duelScore[1]++; else this.duelScore[0]++;
+      if (this.duelScore[0] >= CFG.duelRounds || this.duelScore[1] >= CFG.duelRounds) { this.endMatch(); return; }
+      this.duelWaitUntil = performance.now() + CFG.duelRespawn * 1000 + 700;
     }
     if (this.mode === 'offline') {
       const myKills = this.scores.get(this.myId)?.k ?? 0;
@@ -732,11 +1034,23 @@ class Game {
   private onLocalDeath() {
     this.player.alive = false;
     this.player.enabled = false;
+    this.player.parachute = false;
     this.touch.setEnabled(false); // hide touch UI during the respawn overlay
     if (this.mode === 'offline' && this.gameMode === 'survival') {
       // no respawns in survival — end shortly
       this.hud.showRespawn(true, 0);
       setTimeout(() => { if (this.state === 'playing') this.endMatch(); }, 1400);
+      return;
+    }
+    if (this.mode === 'offline' && this.gameMode === 'duel') {
+      // round-based: the round loop respawns both fighters
+      this.hud.showRespawn(true, CFG.duelRespawn, 'NEXT ROUND IN');
+      return;
+    }
+    if (this.gameMode === 'br') {
+      // no respawns in the warzone
+      this.hud.showRespawn(true, 0, this.mode === 'client' ? 'SQUAD WIPED — SPECTATING' : 'ELIMINATED');
+      if (this.mode !== 'client') setTimeout(() => { if (this.state === 'playing') this.endMatch(); }, 1500);
       return;
     }
     this.respawnDeadline = performance.now() + CFG.respawnDelay * 1000;
@@ -746,6 +1060,8 @@ class Game {
 
   private respawnLocal(p: THREE.Vector3) {
     this.player.spawnAt(p);
+    this.player.parachute = false;
+    if (this.gameMode === 'br') { this.player.setBrLoadout(); this.player.parachute = true; }
     this.player.enabled = true;
     if (this.touchActive) this.touch.setEnabled(true);
     this.hud.showRespawn(false);
@@ -756,15 +1072,17 @@ class Game {
 
   private onLobbyStart = () => {
     if (this.mode !== 'host' || this.state !== 'lobby') return;
-    this.matchTime = CFG.matchTime;
-    this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff } } as HostMsg);
-    // give every connected client a spawn
+    if (this.gameMode !== 'br') this.matchTime = CFG.matchTime;
+    this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId } } as HostMsg);
+    // give every connected client a spawn (BR: drop from the air)
     this.remotes.forEach((rp, id) => {
-      const p = this.world.pickSpawn(this.alivePositions());
+      const p = this.gameMode === 'br'
+        ? new THREE.Vector3((Math.random() * 2 - 1) * 60, CFG.brPlaneY, (Math.random() * 2 - 1) * 60)
+        : this.world.pickSpawn(this.alivePositions());
       rp.hp = 100;
       this.host?.send(this.connOf(id), { t: 'ev', k: 'spawn', i: id, p: [p.x, p.y, p.z] } as HostMsg);
     });
-    this.player.spawnAt(this.world.pickSpawn(this.alivePositions()));
+    if (this.gameMode !== 'br') this.player.spawnAt(this.world.pickSpawn(this.alivePositions()));
     this.hud.setKD(0, 0);
     this.enterMatch();
   };
@@ -778,10 +1096,11 @@ class Game {
     if (this.mode === 'client') return;
     this.resetWorldEntities();
     this.scores.set(this.myId, { k: 0, d: 0 });
-    this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
+    this.player.parachute = false;
+    if (this.gameMode !== 'br') this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
     this.initModeState(this.gameMode === 'gun' ? 5 : this.offlineBotCount);
     if (this.mode === 'host') {
-      this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff } } as HostMsg);
+      this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId } } as HostMsg);
       this.remotes.forEach((rp, id) => {
         if (!this.scores.has(id)) this.scores.set(id, { k: 0, d: 0 });
         rp.hp = 100;
@@ -796,6 +1115,7 @@ class Game {
   private offlineBotCount = 5;
 
   private endMatch() {
+    if (this.state === 'end') return;
     const board: [string, string, number, number][] = [];
     this.scores.forEach((s, id) => board.push([id, this.names.get(id) ?? 'PLAYER', s.k, s.d]));
     board.sort((a, b) => b[2] - a[2]);
@@ -806,10 +1126,21 @@ class Game {
     this.touch.setEnabled(false);
     this.hud.show(false);
     this.hud.showRespawn(false);
+    this.hud.setZoneWarn(false);
     this.audio.matchEnd();
     if (this.mode === 'offline' && this.gameMode === 'survival') {
       const k = this.scores.get(this.myId)?.k ?? 0;
       this.menus.showSurvivalEnd(Math.max(1, this.survWave), k, this.names.get(this.myId) ?? 'YOU');
+      return;
+    }
+    if (this.gameMode === 'br') {
+      const won = this.mode !== 'client' && this.brAliveEnemies() === 0 && this.brAliveAllies() > 0;
+      const k = this.scores.get(this.myId)?.k ?? 0;
+      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU');
+      return;
+    }
+    if (this.mode === 'offline' && this.gameMode === 'duel') {
+      this.menus.showDuelEnd(this.duelScore[0] >= CFG.duelRounds, this.duelScore[0], this.duelScore[1]);
       return;
     }
     if (this.mode === 'offline' && this.gameMode === 'tdm') {
@@ -953,11 +1284,29 @@ class Game {
         { id: this.myId, pos: this.player.pos, alive: this.player.alive, isLocal: true, team: this.teams.get(this.myId) ?? -1 },
       ];
       this.remotes.forEach((rp, id) => targets.push({ id, pos: rp.group.position, alive: rp.alive, isLocal: false, team: this.teams.get(id) ?? -1 }));
-      // TDM: bots also fight each other -> include bots as targets
-      if (this.mode === 'offline' && this.gameMode === 'tdm') {
+      // team modes: bots also fight each other -> include bots as targets
+      if (this.gameMode === 'tdm' || this.gameMode === 'br') {
         this.bots.forEach((b, id) => targets.push({ id, pos: b.pos, alive: b.alive, isLocal: false, team: b.team }));
       }
-      this.bots.forEach(b => b.update(dt, now, targets));
+      const zoneArg = this.gameMode === 'br' && this.brZone
+        ? { cx: this.brZone.cx, cz: this.brZone.cz, r: this.brZone.r, phase: this.brZone.phase }
+        : undefined;
+      this.bots.forEach(b => b.update(dt, now, targets, zoneArg));
+      // soft separation so bots never pile up / get stuck inside each other
+      const alive = [...this.bots.values()].filter(b => b.alive && b.pos.y <= 3);
+      for (let i = 0; i < alive.length; i++) {
+        for (let j = i + 1; j < alive.length; j++) {
+          const a = alive[i], c = alive[j];
+          const dx = c.pos.x - a.pos.x, dz = c.pos.z - a.pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 0.95) {
+            if (d < 0.02) { a.pos.x += (Math.random() - 0.5) * 0.5; a.pos.z += (Math.random() - 0.5) * 0.5; continue; }
+            const push = (0.95 - d) / 2, nx = dx / d, nz = dz / d;
+            a.pos.x -= nx * push; a.pos.z -= nz * push;
+            c.pos.x += nx * push; c.pos.z += nz * push;
+          }
+        }
+      }
       // remote human respawns (killed by bots/clients)
       this.hostRespawns.forEach((at, id) => {
         if (now >= at) {
@@ -976,6 +1325,49 @@ class Game {
           this.survIntermission = 0;
           this.spawnSurvivalWave();
         }
+      }
+      // battle royale: zone simulation + win/lose checks
+      if (this.gameMode === 'br') {
+        this.updateZoneLogic(now);
+        this.checkBREnd(now);
+      }
+      // duel: next round respawn
+      if (this.mode === 'offline' && this.gameMode === 'duel' && this.duelWaitUntil > 0 && now >= this.duelWaitUntil) {
+        this.duelWaitUntil = 0;
+        this.duelRound++;
+        this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
+        const bot = [...this.bots.values()][0];
+        if (bot) bot.spawnAt(this.world.pickSpawn([this.player.pos]));
+        this.hud.toast(`ROUND ${this.duelRound}`, 1400);
+      }
+    } else if (this.gameMode === 'br' && this.zoneSync && this.player.alive) {
+      // client: self-applied zone damage from the synced zone
+      if (now >= this.brZoneDmgAt) {
+        this.brZoneDmgAt = now + 500;
+        const z = this.zoneSync;
+        if (Math.hypot(this.player.pos.x - z.cx, this.player.pos.z - z.cz) > z.r) {
+          const died = this.player.takeDamage(CFG.brDmgBase * (z.phase + 1) * 0.5, now);
+          this.hud.damageFlash();
+          if (died) this.afterDamage(this.myId, this.myId, 'THE ZONE', false, true);
+        }
+      }
+    }
+
+    // loot & zone visuals (BR)
+    if (this.gameMode === 'br') {
+      this.tryLootPickup();
+      this.updateZoneVisuals();
+      if (this.loots.size) {
+        this.loots.forEach(l => {
+          if (l.taken) return;
+          l.mesh.rotation.y += dt * 1.5;
+          l.mesh.position.y = 0.55 + Math.sin(now * 0.0028 + l.pos.x * 3.1) * 0.09;
+        });
+      }
+      if (this.brPlane) {
+        this.brPlane.position.x += 44 * dt;
+        this.brPlane.position.y = CFG.brPlaneY + 14 + Math.sin(now * 0.001) * 2;
+        if (this.brPlane.position.x > 180) { this.world.scene.remove(this.brPlane); this.brPlane = null; }
       }
     }
 
@@ -1010,6 +1402,14 @@ class Game {
         const [a, b] = this.teamKillTotals();
         timerText = fmtTime(this.matchTime);
         modeText = `ALLIES ${a} — ${b} ENEMY`;
+      } else if (this.gameMode === 'br') {
+        // matchTime is driven by the zone simulation (offline/host); clients get it via snaps
+        timerText = fmtTime(this.matchTime);
+        const aliveN = this.brAliveAllies() + this.brAliveEnemies();
+        modeText = `${aliveN} ALIVE — ZONE ${(this.brZone?.phase ?? 0) + 1}`;
+      } else if (this.mode === 'offline' && this.gameMode === 'duel') {
+        timerText = `ROUND ${this.duelRound}`;
+        modeText = `DUEL — YOU ${this.duelScore[0]} : ${this.duelScore[1]} ENEMY`;
       } else {
         this.matchTime -= dt;
         if (this.matchTime <= 0) { this.matchTime = 0; this.endMatch(); return; }
@@ -1021,11 +1421,21 @@ class Game {
         this.lastSnapSent = now;
         this.sendSnapshot();
       }
+    } else if (this.gameMode === 'br') {
+      timerText = this.zoneSync ? `ZONE ${this.zoneSync.phase + 1}` : '';
+      const aliveN = (this.player.alive ? 1 : 0)
+        + [...this.botViews.values()].filter(b => b.alive).length
+        + [...this.remotes.values()].filter(r => r.alive).length;
+      modeText = `${aliveN} ALIVE`;
     } else {
       timerText = fmtTime(this.matchTime);
       modeText = 'ONLINE DEATHMATCH';
     }
     this.hud.setTimer(timerText, modeText);
+
+    // outside-zone warning (BR)
+    const zd = this.zoneDist();
+    this.hud.setZoneWarn(this.gameMode === 'br' && this.player.alive && zd !== null && zd > 0 && this.state === 'playing');
 
     // client input send
     if (this.mode === 'client' && this.player.alive && now - this.lastInputSent >= 1000 / CFG.inputRate) {
@@ -1035,7 +1445,7 @@ class Game {
     }
 
     // HUD
-    this.hud.setHp(this.player.hp);
+    this.hud.setHp(this.player.hp, this.player.armor);
     this.hud.setAmmo(this.player.ammo, this.player.reloading);
     this.hud.setKD(this.scores.get(this.myId)?.k ?? 0, this.scores.get(this.myId)?.d ?? 0);
     this.fx.update(dt);
@@ -1056,7 +1466,10 @@ class Game {
     });
     const sc: Record<string, [number, number]> = {};
     this.scores.forEach((s, i) => { sc[i] = [s.k, s.d]; });
-    this.host.broadcast({ t: 'snap', tm: Math.round(this.matchTime), pl, bt, sc } as HostMsg);
+    const zn = this.brZone
+      ? [r2(this.brZone.cx), r2(this.brZone.cz), r2(this.brZone.r), this.brZone.phase]
+      : undefined;
+    this.host.broadcast({ t: 'snap', tm: Math.round(this.matchTime), pl, bt, sc, zn } as HostMsg);
   }
 
   private renderLoop = () => {
@@ -1090,6 +1503,18 @@ function r2(n: number): number { return Math.round(n * 100) / 100; }
 function botColor(id: string): number {
   return playerColor(id);
 }
+
+// ---- battle royale loot tables ----
+const LOOT_TABLE: [LootKind, number][] = [
+  ['w1', 7], ['w2', 13], ['w3', 11], ['w4', 15], ['w5', 9], ['w6', 8],
+  ['ammo', 17], ['med', 11], ['vest', 9],
+];
+const LOOT_COLORS: Record<LootKind, number> = {
+  w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc98d4e, w4: 0x9fb86e, w5: 0xe0b35c, w6: 0x7d9a55,
+  ammo: 0xd6b96a, med: 0xe07b6a, vest: 0x7f9fb5,
+};
+let lootGeo: THREE.BoxGeometry | null = null;
+const lootMats = new Map<LootKind, THREE.MeshBasicMaterial>();
 
 export function mountGame(container: HTMLElement): () => void {
   injectStyles();

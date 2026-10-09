@@ -21,6 +21,9 @@ export class HUD {
   private hintEl!: HTMLElement;
   private toastEl!: HTMLElement;
   private weaponNameEl!: HTMLElement;
+  private armorChipEl!: HTMLElement;
+  private zoneWarnEl!: HTMLElement;
+  private respawnLabelEl!: HTMLElement;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private vignetteTimer: ReturnType<typeof setTimeout> | null = null;
   private hmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,7 +41,7 @@ export class HUD {
       <div class="ns-feed"></div>
       <div class="ns-hitmarker"><span></span><span></span><span></span><span></span></div>
       <div class="ns-hp-wrap">
-        <div class="ns-hp-label"><span>HEALTH</span><span class="ns-hp-num">100</span></div>
+        <div class="ns-hp-label"><span>HEALTH</span><span class="ns-hp-right"><span class="ns-armor-chip ns-hidden">VEST 0</span><span class="ns-hp-num">100</span></span></div>
         <div class="ns-hp-bar"><div class="ns-hp-fill"></div></div>
       </div>
       <div class="ns-ammo">
@@ -47,7 +50,8 @@ export class HUD {
       </div>
       <div class="ns-toast ns-hidden"></div>
       <div class="ns-crouch-ind">CROUCHED</div>
-      <div class="ns-respawn ns-hidden"><h2>ELIMINATED</h2><p>Respawning in <span class="ns-respawn-count">3</span>...</p></div>
+      <div class="ns-zone-warn ns-hidden">⚠ OUTSIDE THE ZONE — GET BACK!</div>
+      <div class="ns-respawn ns-hidden"><h2>ELIMINATED</h2><p><span class="ns-respawn-label">Respawning in</span> <span class="ns-respawn-count">3</span>...</p></div>
       <div class="ns-scoreboard ns-hidden"><h3>SCOREBOARD</h3><div class="ns-sb-body"></div></div>
       <div class="ns-hint">ESC — pause &nbsp;|&nbsp; TAB — scoreboard &nbsp;|&nbsp; RMB — aim</div>
     `;
@@ -64,15 +68,20 @@ export class HUD {
     this.hintEl = q('.ns-hint');
     this.toastEl = q('.ns-toast');
     this.weaponNameEl = q('.ns-ammo-mag');
+    this.armorChipEl = q('.ns-armor-chip');
+    this.zoneWarnEl = q('.ns-zone-warn');
+    this.respawnLabelEl = q('.ns-respawn-label');
   }
 
   show(v: boolean) { this.root.classList.toggle('ns-hidden', !v); }
 
-  setHp(hp: number) {
+  setHp(hp: number, armor = 0) {
     const pct = Math.max(0, Math.min(100, hp));
     this.hpFill.style.width = pct + '%';
     this.hpFill.classList.toggle('low', pct < 35);
     this.hpNum.textContent = String(Math.round(pct));
+    this.armorChipEl.classList.toggle('ns-hidden', armor <= 0);
+    if (armor > 0) this.armorChipEl.textContent = `VEST ${Math.round(armor)}`;
   }
   setAmmo(cur: number, reloading: boolean) {
     this.ammoNum.textContent = String(cur);
@@ -132,9 +141,18 @@ export class HUD {
     this.vignetteTimer = setTimeout(() => { this.vignetteEl.style.opacity = '0'; }, 220);
   }
 
-  showRespawn(show: boolean, seconds = 0) {
+  showRespawn(show: boolean, seconds = 0, label?: string) {
     this.respawnEl.classList.toggle('ns-hidden', !show);
-    if (show) this.respawnCountEl.textContent = String(Math.ceil(seconds));
+    if (!show) return;
+    this.respawnLabelEl.textContent = label ?? 'Respawning in';
+    if (!label) this.respawnCountEl.textContent = String(Math.ceil(seconds));
+    else this.respawnCountEl.textContent = '';
+  }
+
+  /** flashing OUTSIDE ZONE banner (battle royale) */
+  setZoneWarn(on: boolean) {
+    this.zoneWarnEl.classList.toggle('ns-hidden', !on);
+    this.zoneWarnEl.classList.toggle('show', on);
   }
 
   scoreboard(show: boolean, rows: { name: string; k: number; d: number }[], myName: string) {

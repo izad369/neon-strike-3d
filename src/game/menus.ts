@@ -1,13 +1,13 @@
 // DESERT STRIKE 3D - menu system (DOM)
-import { Difficulty, GameMode } from './constants';
+import { Difficulty, GameMode, MapId } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help';
 
 export interface MenuCallbacks {
-  onStartOffline(name: string, bots: number, diff: Difficulty, mode: GameMode): void;
-  onHost(name: string, bots: number, diff: Difficulty): void;
+  onStartOffline(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId): void;
+  onHost(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId): void;
   onJoin(name: string, code: string): void;
   onResume(): void;
   onLeaveToMenu(): void;
@@ -114,6 +114,20 @@ export class Menus {
 
   private offlineBots = 5;
   private lobbyBots = 4;
+  private onlineMode: GameMode = 'dm';
+
+  private mapSeg(): { el: HTMLElement; get: () => MapId } {
+    const seg = this.el(`<div class="ns-seg ns-map-seg">
+      <button data-m="outpost" class="on">OUTPOST</button><button data-m="urban">URBAN</button><button data-m="oasis">OASIS</button>
+    </div>`);
+    let m: MapId = 'outpost';
+    seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      m = b.dataset.m as MapId;
+    }));
+    return { el: seg, get: () => m };
+  }
 
   private buildOffline() {
     const p = this.el(`<div>
@@ -121,6 +135,8 @@ export class Menus {
       <div class="ns-subtitle">Pick a mode &bull; vs bots</div>
       <div class="ns-field"><label>Game mode</label></div>
       <div class="ns-mode-slot"></div>
+      <div class="ns-field ns-map-field"><label>Map</label></div>
+      <div class="ns-map-slot"></div>
       <div class="ns-field"><label>Bot difficulty</label></div>
       <div class="ns-diff-slot"></div>
       <div class="ns-field ns-bots-field"><label>Bots</label></div>
@@ -130,23 +146,31 @@ export class Menus {
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
     const modeSeg = this.el(`<div class="ns-seg ns-mode-seg">
-      <button data-m="dm" class="on">DM</button><button data-m="tdm">TDM</button><button data-m="survival">SURVIVAL</button><button data-m="gun">GUN GAME</button>
+      <button data-m="dm" class="on">DM</button><button data-m="tdm">TDM</button><button data-m="survival">SURVIVAL</button><button data-m="gun">GUN GAME</button><button data-m="duel">DUEL</button><button data-m="br">BATTLE ROYALE</button>
     </div>`);
     const modeDesc = p.querySelector('.ns-mode-desc') as HTMLElement;
     const botsField = p.querySelector('.ns-bots-field') as HTMLElement;
     const botsSlot = p.querySelector('.ns-bots-slot') as HTMLElement;
+    const mapField = p.querySelector('.ns-map-field') as HTMLElement;
+    const mapSlot = p.querySelector('.ns-map-slot') as HTMLElement;
     const DESCS: Record<GameMode, string> = {
       dm: 'Free-for-all. First to 25 kills or best score in 5:00 wins.',
       tdm: 'You + allied bots vs enemy squad. First team to 40 kills wins.',
       survival: 'Endless waves. Each wave is bigger and meaner. No respawns!',
       gun: 'Every kill unlocks the next weapon. Finish all 7 guns to win.',
+      duel: '1v1 against one bot. First to win 3 rounds takes the duel.',
+      br: 'Jump from the plane, loot up, survive the shrinking zone. Last squad standing wins. Big map, 110+ items.',
     };
+    const ms = this.mapSeg();
     const applyMode = (m: GameMode) => {
       this.mode = m;
       modeDesc.textContent = DESCS[m];
-      const hideBots = m === 'survival' || m === 'gun';
+      const hideBots = m !== 'dm' && m !== 'tdm';
       botsField.style.display = hideBots ? 'none' : '';
       botsSlot.style.display = hideBots ? 'none' : '';
+      const hideMap = m === 'br'; // BR always plays the huge WARZONE map
+      mapField.style.display = hideMap ? 'none' : '';
+      mapSlot.style.display = hideMap ? 'none' : '';
     };
     modeSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
       modeSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
@@ -157,11 +181,12 @@ export class Menus {
     const diffSlot = p.querySelector('.ns-diff-slot')!;
     diffSlot.replaceWith(this.diffSeg());
     p.querySelector('.ns-mode-slot')!.replaceWith(modeSeg);
+    p.querySelector('.ns-map-slot')!.replaceWith(ms.el);
     const bs = this.botsSeg();
     p.querySelector('.ns-bots-slot')!.replaceWith(bs.el);
     p.querySelector('.ns-go')!.addEventListener('click', () => {
       this.offlineBots = bs.get();
-      this.cb.onStartOffline(this.playerName(), this.offlineBots, this.diff, this.mode);
+      this.cb.onStartOffline(this.playerName(), this.offlineBots, this.diff, this.mode, this.mode === 'br' ? 'outpost' : ms.get());
     });
     p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
     this.addPanel('offline', p);
@@ -170,7 +195,11 @@ export class Menus {
   private buildOnline() {
     const p = this.el(`<div>
       <div class="ns-panel-title">ONLINE MATCH</div>
-      <div class="ns-subtitle">Peer-to-peer deathmatch</div>
+      <div class="ns-subtitle">Peer-to-peer with friends</div>
+      <div class="ns-field"><label>Host mode</label></div>
+      <div class="ns-hostmode-slot"></div>
+      <div class="ns-field ns-hostmap-field"><label>Host map</label></div>
+      <div class="ns-hostmap-slot"></div>
       <button class="ns-btn primary ns-host">Create Match (get code)</button>
       <div class="ns-field" style="margin-top:22px"><label>Or join with room code</label>
         <div class="ns-row"><input class="ns-input ns-code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase; letter-spacing:6px; text-align:center" /></div>
@@ -178,11 +207,29 @@ export class Menus {
       <button class="ns-btn ns-join">Join Match</button>
       <button class="ns-btn small ns-back">Back</button>
       <div class="ns-status ns-online-status"></div>
-      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC &mdash; no game server needed. Share the room code with a friend.</div>
+      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC &mdash; no game server needed. Share the room code with a friend. Battle Royale online is co-op: everyone vs bot squads.</div>
     </div>`);
     this.codeInput = p.querySelector('.ns-code')!;
     this.onlineStatusEl = p.querySelector('.ns-online-status')!;
-    p.querySelector('.ns-host')!.addEventListener('click', () => this.cb.onHost(this.playerName(), 4, this.diff));
+    // host mode selection: DM / BR (+ map, hidden for BR)
+    const modeSeg = this.el(`<div class="ns-seg ns-hostmode-seg">
+      <button data-m="dm" class="on">DEATHMATCH</button><button data-m="br">BATTLE ROYALE</button>
+    </div>`);
+    const mapField = p.querySelector('.ns-hostmap-field') as HTMLElement;
+    const mapSlot = p.querySelector('.ns-hostmap-slot') as HTMLElement;
+    const ms = this.mapSeg();
+    modeSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      modeSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      this.onlineMode = b.dataset.m as GameMode;
+      const hideMap = this.onlineMode === 'br';
+      mapField.style.display = hideMap ? 'none' : '';
+      mapSlot.style.display = hideMap ? 'none' : '';
+    }));
+    p.querySelector('.ns-hostmode-slot')!.replaceWith(modeSeg);
+    p.querySelector('.ns-hostmap-slot')!.replaceWith(ms.el);
+    p.querySelector('.ns-host')!.addEventListener('click', () =>
+      this.cb.onHost(this.playerName(), 4, this.diff, this.onlineMode, this.onlineMode === 'br' ? 'outpost' : ms.get()));
     p.querySelector('.ns-join')!.addEventListener('click', () => {
       const c = this.codeInput.value.trim();
       if (c.length < 4) { this.setOnlineStatus('Enter the 5-letter room code.', true); return; }
@@ -285,8 +332,11 @@ export class Menus {
         On mobile tap <b>AIM</b> to toggle. The AWM sniper gets a full scope view.<br />
         <b>Fire-drag (mobile):</b> keep <b>FIRE</b> held and drag it to aim while shooting.<br /><br />
         <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40) &bull;
-        Survival (endless waves, no respawns) &bull; Gun Game (one kill per weapon, finish all 7).<br /><br />
-        <b>Map:</b> two wooden watchtowers, tents, sandbags, barrels &amp; barriers are real cover — use them.
+        Survival (endless waves, no respawns) &bull; Gun Game (one kill per weapon, finish all 7) &bull;
+        <b>Duel</b> (1v1, first to 3 rounds) &bull; <b>Battle Royale</b> (jump from the plane, loot 100+ items,
+        survive the shrinking orange zone on the huge WARZONE map &mdash; last squad standing wins).<br /><br />
+        <b>Maps:</b> DESERT OUTPOST &bull; URBAN BLOCKS &bull; DRY OASIS &bull; WARZONE (BR only, 170&times;170).
+        Two wooden watchtowers, tents, sandbags, barrels &amp; barriers are real cover — use them.
         <b>Headshots</b> deal double damage. Health regenerates after 5s out of combat.<br />
         <b>Online:</b> create a match, share the room code, start fragging (P2P, host is authority).<br /><br />
         <b>Mobile &amp; tablets:</b> touch controls turn on automatically and the game always renders landscape —
@@ -361,6 +411,32 @@ export class Menus {
     this.endBoardEl.appendChild(head);
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>Wave reached</span><span>${wave}</span><span></span></div>`));
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row"><span>Kills</span><span>${kills}</span><span></span></div>`));
+    this.restartBtn.style.display = '';
+    this.show('end');
+  }
+
+  /** battle royale end screen (placement + kills) */
+  showBrEnd(won: boolean, kills: number, placement: number, myName: string) {
+    this.endTitleEl.textContent = won ? 'WARZONE CHAMPION!' : 'ELIMINATED';
+    this.endTitleEl.className = 'ns-end-title ' + (won ? 'win' : 'lose');
+    this.endSubEl.textContent = `#${placement} OF 5 SQUADS — ${myName}: ${kills} KILLS`;
+    this.endBoardEl.innerHTML = '';
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row head"><span>Result</span><span></span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>Placement</span><span>#${placement}</span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row"><span>Kills</span><span>${kills}</span><span></span></div>`));
+    this.restartBtn.style.display = '';
+    this.show('end');
+  }
+
+  /** duel end screen (round score) */
+  showDuelEnd(won: boolean, me: number, enemy: number) {
+    this.endTitleEl.textContent = won ? 'DUEL WON!' : 'DUEL LOST';
+    this.endTitleEl.className = 'ns-end-title ' + (won ? 'win' : 'lose');
+    this.endSubEl.textContent = `ROUNDS — YOU ${me} : ${enemy} ENEMY`;
+    this.endBoardEl.innerHTML = '';
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row head"><span>Fighter</span><span>Rounds</span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>You</span><span>${me}</span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row"><span>Enemy</span><span>${enemy}</span><span></span></div>`));
     this.restartBtn.style.display = '';
     this.show('end');
   }

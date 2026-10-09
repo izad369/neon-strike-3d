@@ -1,6 +1,6 @@
-// NEON STRIKE 3D - AI bots (simulated on host / in offline mode)
+// DESERT STRIKE 3D - AI bots (simulated on host / in offline mode)
 import * as THREE from 'three';
-import { CFG, DIFFICULTY, Difficulty } from './constants';
+import { CFG, DIFFICULTY, Difficulty, ZoneInfo } from './constants';
 import { World } from './world';
 import { makeAvatar } from './avatar';
 import { AudioFX } from './audio';
@@ -56,6 +56,9 @@ export class Bot {
   private lastShotAt = 0;
   private dmgScale: number;
   private noRespawn: boolean;
+  private zone: ZoneInfo | null = null;        // BR safe zone (set per update)
+  private lastPos = new THREE.Vector3();       // stuck watchdog
+  private stuckCheckAt = 0;
   get shooting(): boolean { return performance.now() - this.lastShotAt < 160; }
   private diff: typeof DIFFICULTY[Difficulty];
 
@@ -82,6 +85,7 @@ export class Bot {
     this.alive = true;
     this.state = 'patrol';
     this.lastSeen = null;
+    this.stuckCheckAt = 0;
     this.group.visible = true;
     this.audio.spawnFx();
   }
@@ -104,16 +108,58 @@ export class Bot {
 
   private pickPatrol() {
     const pts = this.world.patrolPoints;
-    this.targetPoint.copy(pts[Math.floor(Math.random() * pts.length)]);
+    this.strafeDir = Math.random() < 0.5 ? -1 : 1; // fresh sidestep direction every waypoint
+    const p = pts[Math.floor(Math.random() * pts.length)];
+    this.targetPoint.copy(p);
+    // battle royale: never pick a waypoint outside the safe zone
+    if (this.zone) {
+      const dx = p.x - this.zone.cx, dz = p.z - this.zone.cz;
+      const d = Math.hypot(dx, dz);
+      const maxR = Math.max(2, this.zone.r - 5);
+      if (d > maxR) this.targetPoint.set(this.zone.cx + (dx / d) * maxR, p.y, this.zone.cz + (dz / d) * maxR);
+    }
   }
 
-  update(dt: number, now: number, targets: BotTarget[]) {
+  update(dt: number, now: number, targets: BotTarget[], zone?: ZoneInfo) {
     if (!this.alive) {
       if (now >= this.respawnAt) {
         const avoid = targets.filter(t => t.alive).map(t => t.pos);
         this.spawnAt(this.world.pickSpawn(avoid));
       }
       return;
+    }
+    this.zone = zone ?? null;
+
+    // --- airborne (BR plane drop): physics only, no AI until landed ---
+    if (this.pos.y > 3) {
+      this.vel.x = 0; this.vel.z = 0;
+      this.vel.y -= CFG.gravity * dt;
+      if (this.pos.y < 55 && this.vel.y < -12) this.vel.y = -12; // soft chute
+      this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, CFG.playerHeight);
+      this.group.position.copy(this.pos);
+      return;
+    }
+
+    // --- stuck watchdog (every ~0.9s): intended to move but didn't -> unstick ---
+    if (now >= this.stuckCheckAt) {
+      if (this.stuckCheckAt > 0 && this.pos.distanceTo(this.lastPos) < 0.35) {
+        this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+        this.lastSeen = null;
+        this.state = 'patrol';
+        // short random escape hop
+        this.targetPoint.set(
+          this.pos.x + (Math.random() - 0.5) * 12,
+          this.pos.y,
+          this.pos.z + (Math.random() - 0.5) * 12
+        );
+        if (this.zone) {
+          const dx = this.targetPoint.x - this.zone.cx, dz = this.targetPoint.z - this.zone.cz;
+          const d = Math.hypot(dx, dz), maxR = Math.max(2, this.zone.r - 5);
+          if (d > maxR) this.targetPoint.set(this.zone.cx + (dx / d) * maxR, this.pos.y, this.zone.cz + (dz / d) * maxR);
+        }
+      }
+      this.lastPos.copy(this.pos);
+      this.stuckCheckAt = now + 850 + Math.random() * 350;
     }
 
     // --- think (10 Hz) ---

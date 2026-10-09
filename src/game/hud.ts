@@ -26,6 +26,12 @@ export function injectStyles() {
 
 .ns-hp-wrap { position: absolute; left: 24px; bottom: 24px; width: 240px; }
 .ns-hp-label { font-family: 'Black Ops One', sans-serif; font-size: 12px; letter-spacing: 2px; color: #cdb27a; margin-bottom: 5px; display: flex; justify-content: space-between; }
+.ns-hp-right { display: flex; gap: 8px; align-items: baseline; }
+.ns-armor-chip { color: #9fc2d8; font-size: 11px; letter-spacing: 1px; background: rgba(38,48,58,0.8); border: 1px solid #5a7488; padding: 1px 7px; border-radius: 3px; }
+.ns-zone-warn { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); display: none;
+  font-family: 'Black Ops One', sans-serif; font-size: 15px; letter-spacing: 3px; color: #ffb26b;
+  background: rgba(48,22,8,0.85); border: 1px solid #d2691e; padding: 7px 16px; border-radius: 6px; }
+.ns-zone-warn.show { display: block; animation: ns-blink 0.9s infinite; }
 .ns-hp-bar { height: 14px; background: rgba(30,26,18,0.8); border: 1px solid #6b5d43; border-radius: 3px; overflow: hidden; }
 .ns-hp-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #c9b26b, #8a9a55); transition: width 0.15s; }
 .ns-hp-fill.low { background: linear-gradient(90deg, #d24a35, #e07b39); }
