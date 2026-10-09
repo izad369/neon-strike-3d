@@ -281,6 +281,8 @@ export class Menus {
         M9 pistol &bull; MP5 &bull; M870 shotgun (8 pellets) &bull; M4A1 &bull; MK14 DMR &bull; M249 LMG (80 rd) &bull; AWM sniper.<br /><br />
         <b>Crouch:</b> <span class="k">C</span> toggles, <span class="k">CTRL</span> holds &bull; <b>CRCH</b> button on mobile.
         Slower, but far more accurate and a smaller target.<br />
+        <b>Aim (ADS):</b> hold <b>RIGHT MOUSE</b> to aim down sights — zoomed in, tighter spread, steadier aim.
+        On mobile tap <b>AIM</b> to toggle. The AWM sniper gets a full scope view.<br />
         <b>Fire-drag (mobile):</b> keep <b>FIRE</b> held and drag it to aim while shooting.<br /><br />
         <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40) &bull;
         Survival (endless waves, no respawns) &bull; Gun Game (one kill per weapon, finish all 7).<br /><br />
@@ -290,7 +292,7 @@ export class Menus {
         <b>Mobile &amp; tablets:</b> touch controls turn on automatically and the game always renders landscape —
         even if you hold the phone upright (a hint reminds you to rotate).<br />
         Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots (hold = auto) &bull;
-        drag the FIRE button itself to aim while firing &bull; <b>CRCH</b> crouches &bull; <b>WPN</b> swaps guns &bull;
+        drag the FIRE button itself to aim while firing &bull; <b>AIM</b> toggles zoom &bull; <b>CRCH</b> crouches &bull; <b>WPN</b> swaps guns &bull;
         <b>JUMP</b>/<b>RLD</b> &bull; <b>II</b> pauses &bull; <b>LIST</b> scoreboard.
       </div>
       <button class="ns-btn small ns-back">Back</button>

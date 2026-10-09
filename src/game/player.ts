@@ -1,5 +1,5 @@
 // DESERT STRIKE 3D - local player: input (keyboard/mouse + touch), physics,
-// shooting, weapon inventory (7 guns), crouch
+// shooting, weapon inventory (7 guns), crouch, aim down sights (ADS)
 import * as THREE from 'three';
 import { CFG, Vec3Arr } from './constants';
 import { World } from './world';
@@ -33,6 +33,8 @@ export class LocalPlayer {
   grounded = true;
   reloading = false;
   crouching = false;
+  aiming = false;        // ADS held (mouse RMB) or toggled (touch AIM button)
+  private aimAmt = 0;    // smoothed 0..1 blend used for fov/spread/speed/viewmodel
   // --- weapon inventory (carries all guns, arcade style) ---
   private mags: number[] = WEAPONS.map(w => w.magSize);
   private weaponIdx = DEFAULT_WEAPON;
@@ -43,6 +45,7 @@ export class LocalPlayer {
   private curEye = CFG.eyeHeight;
   onWeaponSwitch: ((spec: WeaponSpec, slot: number) => void) | null = null;
   onCrouchChange: ((crouching: boolean) => void) | null = null;
+  onAimChange: ((aiming: boolean) => void) | null = null;
   private keys = new Set<string>();
   mouseDown = false;
   sensitivity = 1;
@@ -54,7 +57,7 @@ export class LocalPlayer {
   onLand: (() => void) | null = null;
   private wasGrounded = true;
 
-  constructor(private world: World, camera: THREE.PerspectiveCamera, private audio: AudioFX, dom: HTMLElement) {
+  constructor(private world: World, camera: THREE.PerspectiveCamera, private audio: AudioFX, private dom: HTMLElement) {
     this.vm = new ViewModel(camera);
     this.bindInput(dom);
   }
@@ -66,6 +69,7 @@ export class LocalPlayer {
     window.addEventListener('mouseup', this.onMouseUp);
     document.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('wheel', this.onWheel, { passive: false });
+    dom.addEventListener('contextmenu', this.onContextMenu);
   }
 
   // ---------- weapons ----------
@@ -117,11 +121,28 @@ export class LocalPlayer {
   setCrouch(v: boolean) {
     if (v !== this.crouching) { this.crouching = v; this.onCrouchChange?.(v); }
   }
-  private onMouseDown = (e: MouseEvent) => { if (this.enabled && e.button === 0) this.mouseDown = true; };
-  private onMouseUp = () => { this.mouseDown = false; };
+  // ---------- aim down sights (ADS) ----------
+  setAim(v: boolean) {
+    v = v && this.alive;
+    if (v !== this.aiming) { this.aiming = v; this.onAimChange?.(v); }
+  }
+  toggleAim() { this.setAim(!this.aiming); }
+  /** smoothed aim blend 0..1 (drives fov zoom, spread, viewmodel pose) */
+  get aimAmount(): number { return this.aimAmt; }
+  get isAiming(): boolean { return this.aiming; }
+  private onMouseDown = (e: MouseEvent) => {
+    if (!this.enabled) return;
+    if (e.button === 0) this.mouseDown = true;
+    if (e.button === 2) this.setAim(true); // hold RMB to aim
+  };
+  private onMouseUp = (e: MouseEvent) => {
+    if (e.button === 0) this.mouseDown = false;
+    if (e.button === 2) this.setAim(false);
+  };
+  private onContextMenu = (e: Event) => { if (this.enabled) e.preventDefault(); };
   private onMouseMove = (e: MouseEvent) => {
     if (!this.enabled || document.pointerLockElement === null) return;
-    const s = 0.0021 * this.sensitivity;
+    const s = 0.0021 * this.sensitivity * THREE.MathUtils.lerp(1, CFG.aimSensMul, this.aimAmt);
     this.yaw -= e.movementX * s;
     this.pitch -= e.movementY * s;
     this.pitch = THREE.MathUtils.clamp(this.pitch, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
@@ -142,6 +163,8 @@ export class LocalPlayer {
     this.alive = true;
     this.refillAll();
     this.crouching = false;
+    this.setAim(false);
+    this.aimAmt = 0;
     this.switchWeapon(DEFAULT_WEAPON, true);
     this.audio.spawnFx();
   }
@@ -196,6 +219,8 @@ export class LocalPlayer {
     const fired = { fired: false };
     if (!this.alive) {
       this.vm.setVisible(false);
+      this.setAim(false);
+      this.aimAmt = 0;
       return fired;
     }
     this.vm.setVisible(true && this.enabled !== false);
@@ -218,7 +243,7 @@ export class LocalPlayer {
     // touch look (accumulated thumb drag)
     if (this.touch) {
       const [ldx, ldy] = this.touch.popLook();
-      const ts = TOUCH_LOOK_SENS * this.sensitivity;
+      const ts = TOUCH_LOOK_SENS * this.sensitivity * THREE.MathUtils.lerp(1, CFG.aimSensMul, this.aimAmt);
       this.yaw -= ldx * ts;
       this.pitch = THREE.MathUtils.clamp(this.pitch - ldy * ts, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
     }
@@ -228,6 +253,10 @@ export class LocalPlayer {
     else if (this.keys.has('KeyC')) { /* toggle handled on keydown */ }
     if (this.touch && this.touch.consumeCrouchToggle()) this.toggleCrouch();
     if (this.touch && this.touch.consumeWeaponCycle()) this.cycleWeapon(1);
+    if (this.touch && this.touch.consumeAimToggle()) this.toggleAim();
+
+    // aim blend (ADS)
+    this.aimAmt += ((this.aiming ? 1 : 0) - this.aimAmt) * Math.min(1, dt * CFG.aimLerp);
 
     // eye height lerp (stand <-> crouch)
     const targetEye = this.crouching ? CFG.crouchEye : CFG.eyeHeight;
@@ -237,6 +266,7 @@ export class LocalPlayer {
     const sprint = (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || (!!this.touch && this.touch.fwd > 0.92)) && !this.crouching;
     let speed = sprint ? CFG.sprintSpeed : CFG.walkSpeed;
     if (this.crouching) speed *= CFG.crouchSpeedMul;
+    if (this.aimAmt > 0.01) speed *= THREE.MathUtils.lerp(1, CFG.aimSpeedMul, this.aimAmt); // ADS slows you down
     let fwd = (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0);
     let strafe = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
     if (this.touch) { fwd += this.touch.fwd; strafe += this.touch.strafe; }
@@ -280,7 +310,7 @@ export class LocalPlayer {
     if (this.firing) this.tryShoot(now, fired);
     if (this.touch && this.touch.consumeTapFire()) this.tryShoot(now, fired);
 
-    this.vm.update(dt, this.isMoving, this.pitch, this.yaw, this.reloading, this.crouching);
+    this.vm.update(dt, this.isMoving, this.pitch, this.yaw, this.reloading, this.crouching, this.aimAmt);
     return fired;
   }
 
@@ -294,9 +324,10 @@ export class LocalPlayer {
       this.vm.fire();
       this.audio.shoot();
       const origin = this.eyePos;
-      // dispersion: base + movement penalty, reduced when crouched
+      // dispersion: base + movement penalty, reduced when crouched / aiming
       let spread = spec.spread + (this.isMoving ? spec.moveSpread : 0);
       if (this.crouching) spread *= CFG.crouchSpreadMul;
+      if (this.aimAmt > 0.01) spread *= THREE.MathUtils.lerp(1, CFG.aimSpreadMul, this.aimAmt);
       const shots = spec.pellets;
       for (let p = 0; p < shots; p++) {
         const dirShot = new THREE.Vector3(
@@ -342,6 +373,7 @@ export class LocalPlayer {
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('wheel', this.onWheel);
     document.removeEventListener('mousemove', this.onMouseMove);
+    this.dom.removeEventListener('contextmenu', this.onContextMenu);
     this.vm.dispose();
   }
 }

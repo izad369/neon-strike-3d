@@ -89,6 +89,16 @@ export function injectStyles() {
   color: #cdb27a; background: rgba(30,26,18,0.72); border: 1px solid #6b5d43; padding: 4px 10px; border-radius: 4px; }
 .ns-crouch-ind.show { display: block; animation: ns-blink 2s infinite; }
 
+/* ADS scope overlay (sniper fully aimed): circular mask + hair cross */
+.ns-scope { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.ns-scope-mask { position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 27.5vmin, rgba(8,6,3,0.55) 30vmin, rgba(5,4,2,0.97) 34vmin); }
+.ns-scope-line { position: absolute; background: rgba(20,16,8,0.85); }
+.ns-scope-line.h { left: 0; right: 0; top: 50%; height: 1.5px; transform: translateY(-50%); }
+.ns-scope-line.v { top: 0; bottom: 0; left: 50%; width: 1.5px; transform: translateX(-50%); }
+.ns-hud.scoped .ns-crosshair { display: none; }
+.ns-hud.scoped .ns-scope-line { background: rgba(10,8,4,0.9); box-shadow: 0 0 2px rgba(230,195,92,0.5); }
+
 /* ---------- Menus ---------- */
 .ns-menu { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
   background: radial-gradient(ellipse at 30% 20%, rgba(214,185,106,0.10), transparent 55%),
@@ -168,6 +178,8 @@ export function injectStyles() {
 .ns-tbtn.crouch { right: 108px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
 .ns-tbtn.crouch.on { border-color: #9fb86e; color: #c9d8a4; }
 .ns-tbtn.wpn { right: 176px; bottom: 116px; width: 60px; height: 60px; font-size: 12px; }
+.ns-tbtn.aim { right: 244px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
+.ns-tbtn.aim.on { border-color: #e6c35c; color: #f0e0ac; box-shadow: 0 0 16px rgba(230,195,92,0.45); background: rgba(230,195,92,0.14); }
 .ns-tbtn.sb { left: 22px; top: 66px; width: 52px; height: 40px; border-radius: 8px; font-size: 10px; }
 .ns-tbtn.pause { left: 50%; margin-left: 86px; top: 12px; width: 46px; height: 46px; font-size: 13px; letter-spacing: 2px; }
 

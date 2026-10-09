@@ -102,6 +102,7 @@ class Game {
       this.hud.toast(`${spec.name}  [${slot + 1}/7]`);
     };
     this.player.onCrouchChange = (c) => this.hud.setCrouchIndicator(c);
+    this.player.onAimChange = (a) => this.touch.setAimActive(a);
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('pointerlockchange', this.onPointerLock);
@@ -898,6 +899,19 @@ class Game {
   }
 
   private onResize = () => this.applyLayout();
+
+  /** ADS view: fov zoom per weapon (aim blend smoothed in player) + sniper scope overlay */
+  private applyAimView(_dt: number) {
+    const cam = this.world.camera;
+    const zoom = WEAPONS[this.player.weaponIndex].zoom ?? 1.25;
+    const target = CFG.baseFov / (1 + (zoom - 1) * this.player.aimAmount);
+    if (Math.abs(cam.fov - target) > 0.01) {
+      cam.fov = target;
+      cam.updateProjectionMatrix();
+    }
+    const scoped = !!WEAPONS[this.player.weaponIndex].scope && this.player.aimAmount > 0.82;
+    this.hud.setScope(scoped);
+  }
   private onBeforeUnload = () => {
     if (this.mode === 'client') this.client?.send({ t: 'bye' });
   };
@@ -919,6 +933,7 @@ class Game {
     const { fired } = this.player.update(dt, now);
     void fired;
     this.player.syncCamera(this.world.camera);
+    this.applyAimView(dt);
 
     // death / respawn (offline & host)
     if ((this.mode === 'offline' || this.mode === 'host') && !this.player.alive && this.respawnDeadline > 0) {

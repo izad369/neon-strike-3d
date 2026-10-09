@@ -12,6 +12,7 @@ export class ViewModel {
   private bobT = 0;
   private muzzle = new THREE.Object3D();
   private basePos = new THREE.Vector3(0.34, -0.32, -0.62);
+  private adsPos = new THREE.Vector3(0.0, -0.115, -0.34); // sights aligned to screen center
   private spec: WeaponSpec = WEAPONS[3];
   private crouchDip = 0;
 
@@ -123,27 +124,29 @@ export class ViewModel {
 
   fire() { this.recoil = Math.min(1, this.recoil + 0.5 * this.spec.recoil); }
 
-  update(dt: number, moving: boolean, pitch: number, yaw: number, reloading: boolean, crouching = false) {
+  update(dt: number, moving: boolean, pitch: number, yaw: number, reloading: boolean, crouching = false, aimAmt = 0) {
     this.recoil = Math.max(0, this.recoil - dt * 6);
     if (moving) this.bobT += dt * (crouching ? 7 : 11);
 
-    // weapon sway follows look pitch
-    const targetSwayY = THREE.MathUtils.clamp(pitch * -0.03, -0.05, 0.05);
+    // weapon sway follows look pitch (damped while aiming)
+    const swayMul = 1 - aimAmt * 0.85;
+    const targetSwayY = THREE.MathUtils.clamp(pitch * -0.03, -0.05, 0.05) * swayMul;
     this.swayY += (targetSwayY - this.swayY) * dt * 8;
 
-    const bobX = Math.sin(this.bobT) * (moving ? 0.012 : 0.003);
-    const bobY = Math.abs(Math.cos(this.bobT)) * (moving ? 0.014 : 0.004);
+    const bobX = Math.sin(this.bobT) * (moving ? 0.012 : 0.003) * swayMul;
+    const bobY = Math.abs(Math.cos(this.bobT)) * (moving ? 0.014 : 0.004) * swayMul;
     const kick = this.recoil * 0.09;
-    const reloadDip = reloading ? 0.22 : 0;
+    const reloadDip = reloading ? 0.22 * (1 - aimAmt * 0.5) : 0;
     this.crouchDip += ((crouching ? 0.05 : 0) - this.crouchDip) * dt * 8;
 
-    this.group.position.set(
-      this.basePos.x + bobX,
-      this.basePos.y + bobY - this.recoil * 0.02 - reloadDip + this.swayY - this.crouchDip,
-      this.basePos.z + kick
-    );
-    this.group.rotation.x = this.recoil * 0.14 + (reloading ? 0.5 : 0);
-    this.group.rotation.z = reloading ? 0.25 : 0;
+    // hip-fire pose <-> ADS pose (gun slides to screen center, sights up)
+    const px = THREE.MathUtils.lerp(this.basePos.x, this.adsPos.x, aimAmt) + bobX;
+    const py = THREE.MathUtils.lerp(this.basePos.y, this.adsPos.y, aimAmt) + bobY - this.recoil * 0.02 - reloadDip + this.swayY - this.crouchDip * (1 - aimAmt * 0.7);
+    const pz = THREE.MathUtils.lerp(this.basePos.z, this.adsPos.z, aimAmt) + kick;
+    this.group.position.set(px, py, pz);
+    this.group.rotation.x = this.recoil * 0.14 * (1 - aimAmt * 0.4) + (reloading ? 0.5 * (1 - aimAmt * 0.6) : 0);
+    this.group.rotation.z = reloading ? 0.25 * (1 - aimAmt * 0.6) : 0;
+    this.group.rotation.y = -0.04 * (1 - aimAmt);
   }
 
   setVisible(v: boolean) { this.group.visible = v; }

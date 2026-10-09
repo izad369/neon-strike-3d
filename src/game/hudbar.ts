@@ -30,6 +30,7 @@ export class HUD {
     this.root.className = 'ns-hud ns-hidden';
     this.root.innerHTML = `
       <div class="ns-crosshair"><div class="ns-crosshair-dot"></div></div>
+      <div class="ns-scope ns-hidden"><div class="ns-scope-mask"></div><div class="ns-scope-line h"></div><div class="ns-scope-line v"></div></div>
       <div class="ns-vignette"></div>
       <div class="ns-timer"><div class="ns-timer-time">5:00</div><div class="ns-timer-mode">Deathmatch</div></div>
       <div class="ns-kd"><b>0</b> K &nbsp;/&nbsp; 0 D</div>
@@ -48,7 +49,7 @@ export class HUD {
       <div class="ns-crouch-ind">CROUCHED</div>
       <div class="ns-respawn ns-hidden"><h2>ELIMINATED</h2><p>Respawning in <span class="ns-respawn-count">3</span>...</p></div>
       <div class="ns-scoreboard ns-hidden"><h3>SCOREBOARD</h3><div class="ns-sb-body"></div></div>
-      <div class="ns-hint">ESC — pause &nbsp;|&nbsp; TAB — scoreboard</div>
+      <div class="ns-hint">ESC — pause &nbsp;|&nbsp; TAB — scoreboard &nbsp;|&nbsp; RMB — aim</div>
     `;
     parent.appendChild(this.root);
     const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T;
@@ -94,6 +95,11 @@ export class HUD {
 
   setCrouchIndicator(on: boolean) {
     this.root.querySelector('.ns-crouch-ind')?.classList.toggle('show', on);
+  }
+  /** sniper scope overlay (full ADS with scoped weapons) — also hides the crosshair */
+  setScope(on: boolean) {
+    this.root.querySelector('.ns-scope')?.classList.toggle('ns-hidden', !on);
+    this.root.classList.toggle('scoped', on);
   }
   setTimer(t: string, mode: string) { this.timeEl.textContent = t; this.modeEl.textContent = mode; }
   setKD(k: number, d: number) { this.kdEl.innerHTML = `<b>${k}</b> K &nbsp;/&nbsp; ${d} D`; }

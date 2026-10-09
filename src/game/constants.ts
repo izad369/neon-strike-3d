@@ -31,6 +31,12 @@ export const CFG = {
   crouchSpeedMul: 0.55,
   crouchSpreadMul: 0.6,
   eyeLerp: 9, // eye-height lerp speed (per second)
+  // aim down sights (ADS)
+  baseFov: 75,
+  aimSpeedMul: 0.62,  // move speed while aiming
+  aimSpreadMul: 0.45, // fire dispersion while aiming
+  aimSensMul: 0.62,   // look sensitivity while aiming
+  aimLerp: 12,        // aim blend speed (per second)
   // modes
   tdmTargetKills: 40,   // team kill target
   survivalStartBots: 3, // wave 1 bot count
