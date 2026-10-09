@@ -10,6 +10,7 @@ export interface BotTarget {
   pos: THREE.Vector3;
   alive: boolean;
   isLocal: boolean;
+  team: number; // -1 = no teams (DM), 0/1 = TDM
 }
 
 export interface BotShot {
@@ -24,6 +25,13 @@ type BotState = 'patrol' | 'combat' | 'hunt';
 
 let botCounter = 0;
 
+export interface BotOptions {
+  team?: number;        // -1 default (no teams)
+  hpScale?: number;     // survival waves scale hp
+  dmgScale?: number;    // survival waves scale damage
+  noRespawn?: boolean;  // survival: waves spawn fresh bots, no auto respawn
+}
+
 export class Bot {
   id: string;
   name: string;
@@ -31,7 +39,9 @@ export class Bot {
   vel = new THREE.Vector3();
   yaw = 0;
   hp = CFG.botHp;
+  maxHp = CFG.botHp;
   alive = true;
+  team: number;
   group: THREE.Group;
   hitMeshes: THREE.Mesh[];
   state: BotState = 'patrol';
@@ -44,14 +54,21 @@ export class Bot {
   private strafeDir = 1;
   private repathAt = 0;
   private lastShotAt = 0;
+  private dmgScale: number;
+  private noRespawn: boolean;
   get shooting(): boolean { return performance.now() - this.lastShotAt < 160; }
   private diff: typeof DIFFICULTY[Difficulty];
 
   constructor(name: string, color: number, diff: Difficulty, private world: World, private audio: AudioFX,
-    private onShoot: (shot: BotShot) => void) {
+    private onShoot: (shot: BotShot) => void, opts?: BotOptions) {
     this.id = 'b' + (++botCounter);
     this.name = name;
+    this.team = opts?.team ?? -1;
+    this.dmgScale = opts?.dmgScale ?? 1;
+    this.noRespawn = opts?.noRespawn ?? false;
     this.diff = DIFFICULTY[diff];
+    this.maxHp = Math.round(CFG.botHp * (opts?.hpScale ?? 1));
+    this.hp = this.maxHp;
     const av = makeAvatar(color, name);
     this.group = av.group;
     this.hitMeshes = av.hitMeshes;
@@ -61,7 +78,7 @@ export class Bot {
   spawnAt(p: THREE.Vector3) {
     this.pos.copy(p); this.pos.y += 0.1;
     this.vel.set(0, 0, 0);
-    this.hp = CFG.botHp;
+    this.hp = this.maxHp;
     this.alive = true;
     this.state = 'patrol';
     this.lastSeen = null;
@@ -81,7 +98,7 @@ export class Bot {
 
   private die(now: number) {
     this.alive = false;
-    this.respawnAt = now + CFG.respawnDelay * 1000;
+    this.respawnAt = this.noRespawn ? Number.POSITIVE_INFINITY : now + CFG.respawnDelay * 1000;
     this.group.visible = false;
   }
 
@@ -187,6 +204,8 @@ export class Bot {
     const eye = new THREE.Vector3(this.pos.x, this.pos.y + 1.4, this.pos.z);
     for (const t of targets) {
       if (!t.alive) continue;
+      if (t.id === this.id) continue; // never target self
+      if (this.team !== -1 && t.team === this.team) continue; // team mode: enemies only
       const d = this.pos.distanceTo(t.pos);
       if (d > this.diff.vision) continue;
       const tEye = new THREE.Vector3(t.pos.x, t.pos.y + 1.4, t.pos.z);
@@ -226,7 +245,7 @@ export class Bot {
     this.lastShotAt = now;
     const endPoint = from.clone().add(dir.clone().multiplyScalar(Math.min(dist + 2, CFG.range)));
     if (hit) {
-      const dmg = Math.round(this.diff.dmg * CFG.botDamage * (alignment > 0.9993 ? 1.5 : 1));
+      const dmg = Math.round(this.diff.dmg * CFG.botDamage * (alignment > 0.9993 ? 1.5 : 1) * this.dmgScale);
       this.onShoot({ targetId: hit.id, dmg, headshot: alignment > 0.9993, from, to: endPoint });
     } else {
       this.onShoot({ targetId: '', dmg: 0, headshot: false, from, to: endPoint });

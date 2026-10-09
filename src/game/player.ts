@@ -1,15 +1,17 @@
-// NEON STRIKE 3D - local player: input (keyboard/mouse + touch), physics, shooting
+// DESERT STRIKE 3D - local player: input (keyboard/mouse + touch), physics,
+// shooting, weapon inventory (7 guns), crouch
 import * as THREE from 'three';
 import { CFG, Vec3Arr } from './constants';
 import { World } from './world';
 import { ViewModel } from './viewmodel';
 import { AudioFX } from './audio';
 import { TouchInput, TOUCH_LOOK_SENS } from './touch';
+import { WeaponSpec, WEAPONS, DEFAULT_WEAPON } from './weapons';
 
 // Keyboard normalization: real browsers send e.code; synthetic/edge cases may only send e.key
 const KEY_FALLBACK: Record<string, string> = {
   w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD',
-  ' ': 'Space', r: 'KeyR', shift: 'ShiftLeft', tab: 'Tab',
+  ' ': 'Space', r: 'KeyR', shift: 'ShiftLeft', tab: 'Tab', c: 'KeyC', ctrl: 'ControlLeft',
   arrowup: 'KeyW', arrowdown: 'KeyS', arrowleft: 'KeyA', arrowright: 'KeyD',
 };
 export function normKey(e: KeyboardEvent): string {
@@ -29,12 +31,18 @@ export class LocalPlayer {
   hp = CFG.playerHp;
   alive = true;
   grounded = true;
-  ammo = CFG.magSize;
   reloading = false;
+  crouching = false;
+  // --- weapon inventory (carries all guns, arcade style) ---
+  private mags: number[] = WEAPONS.map(w => w.magSize);
+  private weaponIdx = DEFAULT_WEAPON;
   private reloadEnd = 0;
   private lastFire = 0;
   private lastRegen = 0;
   private lastStep = 0;
+  private curEye = CFG.eyeHeight;
+  onWeaponSwitch: ((spec: WeaponSpec, slot: number) => void) | null = null;
+  onCrouchChange: ((crouching: boolean) => void) | null = null;
   private keys = new Set<string>();
   mouseDown = false;
   sensitivity = 1;
@@ -57,6 +65,31 @@ export class LocalPlayer {
     dom.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
     document.addEventListener('mousemove', this.onMouseMove);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
+  }
+
+  // ---------- weapons ----------
+  get weaponIndex(): number { return this.weaponIdx; }
+  get currentSpec(): WeaponSpec { return WEAPONS[this.weaponIdx]; }
+  get ammo(): number { return this.mags[this.weaponIdx]; }
+
+  switchWeapon(i: number, silent = false) {
+    const idx = ((i % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+    if (idx === this.weaponIdx) return;
+    this.weaponIdx = idx;
+    this.reloading = false; // cancel reload on swap
+    this.lastFire = performance.now(); // brief raise delay
+    this.vm.setWeapon(WEAPONS[idx]);
+    if (!silent) this.audio.weaponSwitch();
+    this.onWeaponSwitch?.(WEAPONS[idx], idx);
+  }
+
+  cycleWeapon(dir = 1) { this.switchWeapon(this.weaponIdx + dir); }
+
+  /** refill every magazine (respawn / survival intermission) */
+  refillAll() {
+    this.mags = WEAPONS.map(w => w.magSize);
+    this.reloading = false;
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -65,8 +98,25 @@ export class LocalPlayer {
     if (k === 'Tab') e.preventDefault();
     this.keys.add(k);
     if (k === 'KeyR') this.tryReload();
+    if (k === 'KeyC' && !e.repeat) this.toggleCrouch();
+    if (k === 'KeyQ' && !e.repeat) this.cycleWeapon(1);
+    const digit = /^(Digit|Numpad)([1-7])$/.exec(k);
+    if (digit && !e.repeat) this.switchWeapon(parseInt(digit[2], 10) - 1);
   };
   private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(normKey(e)); };
+  private onWheel = (e: WheelEvent) => {
+    if (!this.enabled || document.pointerLockElement === null) return;
+    e.preventDefault();
+    this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+  };
+
+  toggleCrouch() {
+    this.crouching = !this.crouching;
+    this.onCrouchChange?.(this.crouching);
+  }
+  setCrouch(v: boolean) {
+    if (v !== this.crouching) { this.crouching = v; this.onCrouchChange?.(v); }
+  }
   private onMouseDown = (e: MouseEvent) => { if (this.enabled && e.button === 0) this.mouseDown = true; };
   private onMouseUp = () => { this.mouseDown = false; };
   private onMouseMove = (e: MouseEvent) => {
@@ -78,9 +128,10 @@ export class LocalPlayer {
   };
 
   tryReload() {
-    if (!this.alive || this.reloading || this.ammo >= CFG.magSize) return;
+    const spec = this.currentSpec;
+    if (!this.alive || this.reloading || this.mags[this.weaponIdx] >= spec.magSize) return;
     this.reloading = true;
-    this.reloadEnd = performance.now() + CFG.reloadTime * 1000;
+    this.reloadEnd = performance.now() + spec.reloadTime * 1000;
     this.audio.reload();
   }
 
@@ -89,14 +140,18 @@ export class LocalPlayer {
     this.vel.set(0, 0, 0);
     this.hp = CFG.playerHp;
     this.alive = true;
-    this.ammo = CFG.magSize;
-    this.reloading = false;
+    this.refillAll();
+    this.crouching = false;
+    this.switchWeapon(DEFAULT_WEAPON, true);
     this.audio.spawnFx();
   }
 
   get eyePos(): THREE.Vector3 {
-    return new THREE.Vector3(this.pos.x, this.pos.y + CFG.eyeHeight, this.pos.z);
+    return new THREE.Vector3(this.pos.x, this.pos.y + this.curEye, this.pos.z);
   }
+
+  /** current body height for collision (crouch shrinks it) */
+  get bodyHeight(): number { return this.crouching ? CFG.crouchHeight : CFG.playerHeight; }
 
   /** true while any fire source (mouse or touch button) is held */
   get firing(): boolean {
@@ -157,7 +212,7 @@ export class LocalPlayer {
     // reload finish
     if (this.reloading && performance.now() >= this.reloadEnd) {
       this.reloading = false;
-      this.ammo = CFG.magSize;
+      this.mags[this.weaponIdx] = this.currentSpec.magSize;
     }
 
     // touch look (accumulated thumb drag)
@@ -168,9 +223,20 @@ export class LocalPlayer {
       this.pitch = THREE.MathUtils.clamp(this.pitch - ldy * ts, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
     }
 
+    // crouch: C toggles, CTRL holds, touch button toggles
+    if (this.keys.has('ControlLeft') || this.keys.has('ControlRight')) this.setCrouch(true);
+    else if (this.keys.has('KeyC')) { /* toggle handled on keydown */ }
+    if (this.touch && this.touch.consumeCrouchToggle()) this.toggleCrouch();
+    if (this.touch && this.touch.consumeWeaponCycle()) this.cycleWeapon(1);
+
+    // eye height lerp (stand <-> crouch)
+    const targetEye = this.crouching ? CFG.crouchEye : CFG.eyeHeight;
+    this.curEye += (targetEye - this.curEye) * Math.min(1, dt * CFG.eyeLerp);
+
     // movement — keyboard (digital) merged with touch stick (analog)
-    const sprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || (!!this.touch && this.touch.fwd > 0.92);
-    const speed = sprint ? CFG.sprintSpeed : CFG.walkSpeed;
+    const sprint = (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || (!!this.touch && this.touch.fwd > 0.92)) && !this.crouching;
+    let speed = sprint ? CFG.sprintSpeed : CFG.walkSpeed;
+    if (this.crouching) speed *= CFG.crouchSpeedMul;
     let fwd = (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0);
     let strafe = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
     if (this.touch) { fwd += this.touch.fwd; strafe += this.touch.strafe; }
@@ -185,21 +251,24 @@ export class LocalPlayer {
 
     const jumpPressed = this.keys.has('Space') || (this.touch ? this.touch.consumeJump() : false);
     if (jumpPressed && this.grounded) {
-      this.vel.y = CFG.jumpVel;
-      this.grounded = false;
-      this.audio.jump();
+      if (this.crouching) { this.setCrouch(false); } // stand up instead of jumping
+      else {
+        this.vel.y = CFG.jumpVel;
+        this.grounded = false;
+        this.audio.jump();
+      }
     }
     if (this.touch && this.touch.consumeReload()) this.tryReload();
     this.vel.y -= CFG.gravity * dt;
 
     const wasAir = !this.grounded;
-    const res = this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, CFG.playerHeight);
+    const res = this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, this.bodyHeight);
     this.grounded = res.grounded;
     if (wasAir && this.grounded) { this.audio.land(); this.onLand?.(); }
 
     // footsteps
     if (this.grounded && (Math.abs(this.vel.x) + Math.abs(this.vel.z)) > 2) {
-      if (now - this.lastStep > (sprint ? 300 : 400)) { this.lastStep = now; this.audio.step(); }
+      if (now - this.lastStep > (sprint ? 300 : this.crouching ? 620 : 400)) { this.lastStep = now; this.audio.step(); }
     }
 
     // health regen
@@ -207,37 +276,43 @@ export class LocalPlayer {
       this.hp = Math.min(CFG.playerHp, this.hp + CFG.regenRate * dt);
     }
 
-    // shooting — held fire (mouse / touch button) or a quick tap on the look zone
+    // shooting — held fire (mouse / touch button / fire-drag) or a quick tap on the look zone
     if (this.firing) this.tryShoot(now, fired);
     if (this.touch && this.touch.consumeTapFire()) this.tryShoot(now, fired);
 
-    this.vm.update(dt, this.isMoving, this.pitch, this.yaw, this.reloading);
+    this.vm.update(dt, this.isMoving, this.pitch, this.yaw, this.reloading, this.crouching);
     return fired;
   }
 
   private tryShoot(now: number, fired: { fired: boolean }) {
-    if (this.reloading || now - this.lastFire < CFG.fireInterval * 1000) return;
-    if (this.ammo > 0) {
+    const spec = this.currentSpec;
+    if (this.reloading || now - this.lastFire < spec.fireInterval * 1000) return;
+    if (this.mags[this.weaponIdx] > 0) {
       this.lastFire = now;
-      this.ammo--;
+      this.mags[this.weaponIdx]--;
       fired.fired = true;
       this.vm.fire();
       this.audio.shoot();
       const origin = this.eyePos;
-      const dirShot = new THREE.Vector3(
-        -Math.sin(this.yaw) * Math.cos(this.pitch),
-        Math.sin(this.pitch),
-        -Math.cos(this.yaw) * Math.cos(this.pitch)
-      );
-      // hip spread when moving
-      if (this.isMoving) {
-        dirShot.x += (Math.random() - 0.5) * 0.018;
-        dirShot.y += (Math.random() - 0.5) * 0.018;
-        dirShot.z += (Math.random() - 0.5) * 0.018;
-        dirShot.normalize();
+      // dispersion: base + movement penalty, reduced when crouched
+      let spread = spec.spread + (this.isMoving ? spec.moveSpread : 0);
+      if (this.crouching) spread *= CFG.crouchSpreadMul;
+      const shots = spec.pellets;
+      for (let p = 0; p < shots; p++) {
+        const dirShot = new THREE.Vector3(
+          -Math.sin(this.yaw) * Math.cos(this.pitch),
+          Math.sin(this.pitch),
+          -Math.cos(this.yaw) * Math.cos(this.pitch)
+        );
+        if (spread > 0) {
+          dirShot.x += (Math.random() - 0.5) * spread * 2;
+          dirShot.y += (Math.random() - 0.5) * spread * 2;
+          dirShot.z += (Math.random() - 0.5) * spread * 2;
+          dirShot.normalize();
+        }
+        this.onShoot?.(origin, dirShot);
       }
-      this.onShoot?.(origin, dirShot);
-      if (this.ammo === 0) this.tryReload();
+      if (this.mags[this.weaponIdx] === 0) this.tryReload();
     } else {
       this.audio.empty();
       this.lastFire = now;
@@ -265,6 +340,7 @@ export class LocalPlayer {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('wheel', this.onWheel);
     document.removeEventListener('mousemove', this.onMouseMove);
     this.vm.dispose();
   }

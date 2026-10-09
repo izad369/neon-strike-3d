@@ -25,6 +25,28 @@ export const CFG = {
   targetKills: 25,
   snapRate: 12, // online snapshots per second
   inputRate: 20, // online input sends per second
+  // crouch
+  crouchEye: 0.95,
+  crouchHeight: 1.15,
+  crouchSpeedMul: 0.55,
+  crouchSpreadMul: 0.6,
+  eyeLerp: 9, // eye-height lerp speed (per second)
+  // modes
+  tdmTargetKills: 40,   // team kill target
+  survivalStartBots: 3, // wave 1 bot count
+  survivalPerWave: 1,   // bots added per wave
+  survivalMaxAlive: 9,  // concurrent bots cap
+  survivalIntermission: 5, // seconds between waves
+  gunGameTime: 360,     // 6 minutes
+};
+
+/** offline game modes (online play is always deathmatch) */
+export type GameMode = 'dm' | 'tdm' | 'survival' | 'gun';
+export const MODE_LABEL: Record<GameMode, string> = {
+  dm: 'DEATHMATCH',
+  tdm: 'TEAM DEATHMATCH',
+  survival: 'SURVIVAL',
+  gun: 'GUN GAME',
 };
 
 export const COLORS = {

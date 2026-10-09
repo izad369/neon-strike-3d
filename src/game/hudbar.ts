@@ -19,6 +19,9 @@ export class HUD {
   private sbEl!: HTMLElement;
   private sbBody!: HTMLElement;
   private hintEl!: HTMLElement;
+  private toastEl!: HTMLElement;
+  private weaponNameEl!: HTMLElement;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private vignetteTimer: ReturnType<typeof setTimeout> | null = null;
   private hmTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -41,6 +44,8 @@ export class HUD {
         <div class="ns-ammo-num">30</div>
         <div class="ns-ammo-sub"><span class="ns-ammo-mag">RIFLE</span> &bull; <span class="ns-ammo-state">READY</span></div>
       </div>
+      <div class="ns-toast ns-hidden"></div>
+      <div class="ns-crouch-ind">CROUCHED</div>
       <div class="ns-respawn ns-hidden"><h2>ELIMINATED</h2><p>Respawning in <span class="ns-respawn-count">3</span>...</p></div>
       <div class="ns-scoreboard ns-hidden"><h3>SCOREBOARD</h3><div class="ns-sb-body"></div></div>
       <div class="ns-hint">ESC — pause &nbsp;|&nbsp; TAB — scoreboard</div>
@@ -56,6 +61,8 @@ export class HUD {
     this.respawnEl = q('.ns-respawn'); this.respawnCountEl = q('.ns-respawn-count');
     this.sbEl = q('.ns-scoreboard'); this.sbBody = q('.ns-sb-body');
     this.hintEl = q('.ns-hint');
+    this.toastEl = q('.ns-toast');
+    this.weaponNameEl = q('.ns-ammo-mag');
   }
 
   show(v: boolean) { this.root.classList.toggle('ns-hidden', !v); }
@@ -71,6 +78,22 @@ export class HUD {
     this.ammoNum.classList.toggle('empty', cur === 0 && !reloading);
     this.ammoSub.textContent = reloading ? 'RELOADING' : cur === 0 ? 'EMPTY' : 'READY';
     this.ammoSub.className = 'ns-ammo-state' + (reloading ? ' rel' : '');
+  }
+  setWeaponName(name: string) { this.weaponNameEl.textContent = name; }
+
+  /** center-screen fading toast: weapon switch, wave banner, gun-game progress */
+  toast(text: string, ms = 1400) {
+    this.toastEl.textContent = text;
+    this.toastEl.classList.remove('ns-hidden');
+    this.toastEl.classList.remove('pop');
+    void this.toastEl.offsetWidth; // restart animation
+    this.toastEl.classList.add('pop');
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => this.toastEl.classList.add('ns-hidden'), ms);
+  }
+
+  setCrouchIndicator(on: boolean) {
+    this.root.querySelector('.ns-crouch-ind')?.classList.toggle('show', on);
   }
   setTimer(t: string, mode: string) { this.timeEl.textContent = t; this.modeEl.textContent = mode; }
   setKD(k: number, d: number) { this.kdEl.innerHTML = `<b>${k}</b> K &nbsp;/&nbsp; ${d} D`; }

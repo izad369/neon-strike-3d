@@ -77,6 +77,18 @@ export function injectStyles() {
 .ns-respawn p { font-size: 18px; color: #e2d7ba; margin-top: 8px; }
 .ns-hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #7d7154; letter-spacing: 1px; }
 
+/* center toast (weapon switch / wave banner) */
+.ns-toast { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); text-align: center;
+  font-family: 'Black Ops One', sans-serif; font-size: 24px; letter-spacing: 5px; color: #e6cfa0;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.8); pointer-events: none; }
+.ns-toast.pop { animation: ns-toast-pop 1.4s ease-out forwards; }
+@keyframes ns-toast-pop { 0% { opacity: 0; transform: translateX(-50%) scale(1.25); } 12% { opacity: 1; transform: translateX(-50%) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+/* crouch indicator */
+.ns-crouch-ind { position: absolute; left: 24px; bottom: 130px; display: none; font-size: 12px; letter-spacing: 3px;
+  color: #cdb27a; background: rgba(30,26,18,0.72); border: 1px solid #6b5d43; padding: 4px 10px; border-radius: 4px; }
+.ns-crouch-ind.show { display: block; animation: ns-blink 2s infinite; }
+
 /* ---------- Menus ---------- */
 .ns-menu { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
   background: radial-gradient(ellipse at 30% 20%, rgba(214,185,106,0.10), transparent 55%),
@@ -153,26 +165,37 @@ export function injectStyles() {
 .ns-tbtn.fire.on { border-color: #d24a35; color: #e8a08e; box-shadow: 0 0 16px rgba(210,74,53,0.45); background: rgba(210,74,53,0.16); }
 .ns-tbtn.jump { right: 138px; bottom: 30px; width: 66px; height: 66px; font-size: 12px; }
 .ns-tbtn.reload { right: 34px; bottom: 204px; width: 58px; height: 58px; font-size: 11px; }
+.ns-tbtn.crouch { right: 108px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
+.ns-tbtn.crouch.on { border-color: #9fb86e; color: #c9d8a4; }
+.ns-tbtn.wpn { right: 176px; bottom: 116px; width: 60px; height: 60px; font-size: 12px; }
 .ns-tbtn.sb { left: 22px; top: 66px; width: 52px; height: 40px; border-radius: 8px; font-size: 10px; }
 .ns-tbtn.pause { left: 50%; margin-left: 86px; top: 12px; width: 46px; height: 46px; font-size: 13px; letter-spacing: 2px; }
 
-/* rotate-your-device overlay (touch mode + portrait only) */
-.ns-rotate { position: absolute; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center;
-  flex-direction: column; gap: 18px; background: rgba(14,12,8,0.95); text-align: center;
-  font-family: 'Black Ops One', sans-serif; font-size: 16px; letter-spacing: 3px; color: #cdb27a; line-height: 1.8; }
-.ns-rotate span { font-size: 11px; color: #a08f6f; letter-spacing: 2px; }
-.ns-rotate-icon { width: 58px; height: 82px; border: 3px solid #cdb27a; border-radius: 10px;
-  animation: ns-rot 1.8s ease-in-out infinite; box-shadow: 0 0 14px rgba(214,185,106,0.2); }
-@keyframes ns-rot { 0%, 25% { transform: rotate(0deg); } 65%, 100% { transform: rotate(-90deg) scaleY(0.72); } }
-@media (orientation: portrait) {
-  .ns-touch:not(.ns-hidden) .ns-rotate { display: flex; }
+/* forced landscape: render the game rotated 90° on portrait phones.
+   The whole game runs in landscape even when the device is not rotated. */
+.ns-root.ns-forced-landscape {
+  width: 100vh; height: 100vw;
+  transform-origin: left top;
+  transform: rotate(90deg) translateY(-100%);
 }
+
+/* rotate-your-phone hint (non-blocking banner) */
+.ns-rotate-hint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 70;
+  display: flex; align-items: center; gap: 10px; pointer-events: none;
+  background: rgba(20,17,11,0.88); border: 1px solid #6b5d43; border-radius: 8px; padding: 8px 14px;
+  font-family: 'Black Ops One', sans-serif; font-size: 12px; letter-spacing: 2px; color: #cdb27a;
+  text-align: left; line-height: 1.45; animation: ns-blink 2.4s infinite; }
+.ns-rotate-hint span { font-size: 10px; color: #a08f6f; letter-spacing: 1px; }
+.ns-rotate-icon-sm { display: inline-block; width: 20px; height: 30px; border: 2px solid #cdb27a; border-radius: 4px;
+  animation: ns-rot 1.8s ease-in-out infinite; flex: none; }
+@keyframes ns-rot { 0%, 25% { transform: rotate(0deg); } 65%, 100% { transform: rotate(-90deg) scaleY(0.72); } }
 
 /* HUD adjustments while touch controls are active */
 .ns-touch-mode .ns-root-canvas, .ns-touch-mode canvas { touch-action: none; }
 .ns-root.ns-touch-mode { touch-action: none; overscroll-behavior: none; -webkit-touch-callout: none; }
 .ns-root.ns-touch-mode .ns-ammo { right: 140px; bottom: 24px; }
 .ns-root.ns-touch-mode .ns-hp-wrap { bottom: 200px; width: 190px; left: 20px; }
+.ns-root.ns-touch-mode .ns-crouch-ind { bottom: auto; top: 66px; }
 .ns-root.ns-touch-mode .ns-hint { display: none; }
 .ns-root.ns-touch-mode .ns-feed { top: 64px; right: 18px; max-width: 60vw; }
 @media (max-width: 760px) {

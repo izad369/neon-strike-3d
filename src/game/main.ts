@@ -1,6 +1,7 @@
-// DESERT STRIKE 3D - main orchestrator: game states, modes (offline / host / client), loop
+// DESERT STRIKE 3D - main orchestrator: game states, modes (offline / host / client),
+// offline game modes (DM / TDM / Survival / Gun Game), forced-landscape layout
 import * as THREE from 'three';
-import { CFG, fmtTime, Difficulty, ClientMsg, HostMsg, SnapBot, SnapPlayer } from './constants';
+import { CFG, fmtTime, Difficulty, ClientMsg, HostMsg, SnapBot, SnapPlayer, GameMode, MODE_LABEL } from './constants';
 import { World } from './world';
 import { AudioFX } from './audio';
 import { Effects } from './effects';
@@ -15,6 +16,7 @@ import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
 import { loadSoldier } from './assets';
 import { playerColor } from './avatar';
+import { WEAPONS, GUN_GAME_LADDER } from './weapons';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -52,6 +54,16 @@ class Game {
   private names = new Map<string, string>();
   private matchTime = CFG.matchTime;
   private diff: Difficulty = 'medium';
+  private gameMode: GameMode = 'dm';
+  // TDM: id -> team (0 = player's allies, 1 = enemies)
+  private teams = new Map<string, number>();
+  // survival wave state
+  private survWave = 0;
+  private survPending = 0;      // bots left to spawn for the current wave
+  private survIntermission = 0; // timestamp when the next wave spawns
+  private survElapsed = 0;
+  private survEnding = false;
+  private lastWaveAlive = 0;
 
   private lastSnapSent = 0;
   private lastInputSent = 0;
@@ -72,7 +84,7 @@ class Game {
       onScoreboard: (show) => this.showScoreboard(show),
     });
     this.menus = new Menus(root, {
-      onStartOffline: (name, bots, diff) => this.startOffline(name, bots, diff),
+      onStartOffline: (name, bots, diff, mode) => this.startOffline(name, bots, diff, mode),
       onHost: (name, bots, diff) => this.startHost(name, bots, diff),
       onJoin: (name, code) => this.joinMatch(name, code),
       onResume: () => this.resume(),
@@ -85,6 +97,11 @@ class Game {
     this.player = new LocalPlayer(this.world, this.world.camera, this.audio, root);
     this.player.onShoot = (o, d) => this.onLocalShoot(o, d);
     this.player.touch = this.touch;
+    this.player.onWeaponSwitch = (spec, slot) => {
+      this.hud.setWeaponName(spec.name);
+      this.hud.toast(`${spec.name}  [${slot + 1}/7]`);
+    };
+    this.player.onCrouchChange = (c) => this.hud.setCrouchIndicator(c);
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('pointerlockchange', this.onPointerLock);
@@ -93,10 +110,12 @@ class Game {
     this.world.renderer.domElement.addEventListener('click', this.onCanvasClick);
     window.addEventListener('beforeunload', this.onBeforeUnload);
     window.addEventListener('ns-lobby-start', this.onLobbyStart as EventListener);
-    // auto-pause when the phone is rotated to portrait mid-match
+    // re-layout on rotation (game keeps rendering landscape via forced rotation)
     this.rotMq = window.matchMedia('(orientation: portrait)');
     this.rotMq.addEventListener?.('change', this.onOrientationChange);
+    window.visualViewport?.addEventListener?.('resize', this.onResize);
 
+    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
     this.menus.show('main');
     this.renderLoop();
   }
@@ -112,6 +131,7 @@ class Game {
     this.remotes.clear();
     this.scores.clear();
     this.names.clear();
+    this.teams.clear();
     this.hostRespawns.clear();
     this.prevShootFlags.clear();
     this.fx.clear();
@@ -161,42 +181,133 @@ class Game {
     if (this.state === 'playing' && !this.paused) this.touch.setEnabled(active);
   }
 
+  /**
+   * Layout: on touch devices in portrait the whole game is rendered rotated
+   * 90° (forced landscape) instead of pausing — plus a gentle rotate hint.
+   */
+  private applyLayout() {
+    const vv = window.visualViewport;
+    const vw = Math.round(vv?.width ?? window.innerWidth);
+    const vh = Math.round(vv?.height ?? window.innerHeight);
+    const portrait = vh > vw;
+    const force = this.touchActive && portrait;
+    this.root.classList.toggle('ns-forced-landscape', force);
+    this.world.resize(force ? vh : vw, force ? vw : vh);
+  }
+
   private onOrientationChange = () => {
-    if (this.touchActive && this.state === 'playing' && !this.paused && !this.menus.isVisible()) this.pauseGame();
+    this.applyLayout();
+    if (this.touchActive && this.state === 'playing') this.touch.showRotateHint(true);
   };
 
   private enterMatch() {
     this.state = 'playing';
     this.paused = false;
-    this.matchTime = CFG.matchTime;
     this.menus.show(null);
     this.hud.show(true);
     this.hud.setRoom(this.mode === 'host' ? `ROOM ${this.host?.code ?? ''}` : this.mode === 'client' ? `ROOM ${this.clientRoom}` : '');
+    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
     this.enterTouchUI();
+    this.applyLayout();
+    if (this.touchActive && this.isPortrait()) this.touch.showRotateHint(true);
   }
 
-  private startOffline(name: string, botCount: number, diff: Difficulty) {
+  private isPortrait(): boolean {
+    return (window.visualViewport?.height ?? window.innerHeight) > (window.visualViewport?.width ?? window.innerWidth);
+  }
+
+  private startOffline(name: string, botCount: number, diff: Difficulty, mode: GameMode) {
     this.audio.resume();
     this.cleanupNet();
     this.resetWorldEntities();
     this.mode = 'offline';
     this.myId = '1';
     this.diff = diff;
+    this.gameMode = mode;
     this.setupLocal(name);
-    for (let i = 0; i < botCount; i++) this.addBot(diff);
+    this.initModeState(botCount);
     this.hud.setKD(0, 0);
     this.enterMatch();
   }
 
-  private addBot(diff: Difficulty) {
+  /** mode-specific setup, shared by startOffline and restartMatch */
+  private initModeState(botCount: number) {
+    this.offlineBotCount = botCount;
+    this.teams.clear();
+    this.survWave = 0; this.survPending = 0; this.survIntermission = 0;
+    this.survElapsed = 0; this.survEnding = false; this.lastWaveAlive = 0;
+    if (this.gameMode === 'tdm') {
+      this.teams.set(this.myId, 0);
+      // half of the bots are allies, the rest enemies
+      const allies = Math.floor(botCount / 2);
+      for (let i = 0; i < botCount; i++) this.addBot(this.diff, { team: i < allies ? 0 : 1, idx: i });
+      this.matchTime = CFG.matchTime;
+    } else if (this.gameMode === 'survival') {
+      this.matchTime = 9999 * 60; // counts up; HUD shows wave info
+      this.survIntermission = performance.now() + 3200;
+      this.hud.toast('SURVIVAL — GET READY', 2600);
+    } else if (this.gameMode === 'gun') {
+      this.matchTime = CFG.gunGameTime;
+      for (let i = 0; i < 5; i++) this.addBot(this.diff, { idx: i });
+      this.player.switchWeapon(GUN_GAME_LADDER[0], true);
+    } else {
+      this.matchTime = CFG.matchTime;
+      for (let i = 0; i < botCount; i++) this.addBot(this.diff, { idx: i });
+    }
+  }
+
+  private addBot(diff: Difficulty, opts?: { team?: number; idx?: number; hpScale?: number; dmgScale?: number; noRespawn?: boolean }) {
+    const idx = opts?.idx ?? this.bots.size;
     const id = 'b' + (this.bots.size + 1);
-    const name = this.menus.botNameFor(this.bots.size);
-    const bot = new Bot(name, botColor(id), diff, this.world, this.audio, shot => this.onBotShot(shot));
+    const name = this.menus.botNameFor(idx);
+    // TDM: team colors (olive allies / red enemies). DM: per-bot marker palette.
+    const color = opts?.team !== undefined
+      ? (opts.team === 0 ? 0x7d8f4e : 0xb0432a)
+      : botColor(id);
+    const bot = new Bot(name, color, diff, this.world, this.audio, shot => this.onBotShot(shot), {
+      team: opts?.team ?? -1,
+      hpScale: opts?.hpScale,
+      dmgScale: opts?.dmgScale,
+      noRespawn: opts?.noRespawn,
+    });
     bot.spawnAt(this.world.pickSpawn(this.alivePositions()));
     this.world.scene.add(bot.group);
     this.bots.set(id, bot);
     this.scores.set(id, { k: 0, d: 0 });
     this.names.set(id, name);
+    if (opts?.team !== undefined) this.teams.set(id, opts.team);
+    return bot;
+  }
+
+  /** spawn the next survival wave (bigger + meaner every wave) */
+  private spawnSurvivalWave() {
+    // clean up previous wave corpses (survival bots never respawn)
+    const dead: string[] = [];
+    this.bots.forEach((b, id) => { if (!b.alive) dead.push(id); });
+    for (const id of dead) {
+      this.world.scene.remove(this.bots.get(id)!.group);
+      this.bots.delete(id);
+    }
+    this.survWave++;
+    const n = CFG.survivalStartBots + (this.survWave - 1) * CFG.survivalPerWave;
+    const batch = Math.min(n, CFG.survivalMaxAlive);
+    this.survPending = n - batch;
+    const hpScale = Math.min(2.2, 1 + 0.12 * (this.survWave - 1));
+    const dmgScale = Math.min(2.2, 1 + 0.09 * (this.survWave - 1));
+    for (let i = 0; i < batch; i++) {
+      const bot = this.addBot(this.diff, {
+        idx: this.bots.size,
+        hpScale, dmgScale, noRespawn: true,
+        team: this.gameMode === 'tdm' ? 1 : undefined,
+      });
+      bot.spawnAt(this.world.pickSpawn(this.alivePositions()));
+    }
+    this.lastWaveAlive = batch;
+    this.hud.toast(`WAVE ${this.survWave}`, 2000);
+    this.audio.waveStart();
+    // fresh magazines each wave
+    this.player.refillAll();
+    this.player.hp = Math.min(CFG.playerHp, this.player.hp + 30);
   }
 
   // ---- host (online) ----
@@ -209,8 +320,9 @@ class Game {
     this.mode = 'host';
     this.myId = '1';
     this.diff = diff;
+    this.gameMode = 'dm'; // online stays deathmatch
     this.setupLocal(name);
-    for (let i = 0; i < botCount; i++) this.addBot(diff);
+    this.initModeState(botCount);
     this.menus.show('lobby');
     this.menus.setLobby('.....', 1);
     this.menus.setLobbyNote('Creating room...');
@@ -454,8 +566,8 @@ class Game {
   }
 
   private onLocalShoot(origin: THREE.Vector3, dir: THREE.Vector3) {
-    const hit = this.world.raycast(origin, dir, CFG.range, this.entityHitMeshes());
-    const end = hit ? hit.point : origin.clone().add(dir.clone().multiplyScalar(CFG.range));
+    const hit = this.world.raycast(origin, dir, this.player.currentSpec.range, this.entityHitMeshes());
+    const end = hit ? hit.point : origin.clone().add(dir.clone().multiplyScalar(this.player.currentSpec.range));
     this.fx.muzzleFlash(this.player.vm.muzzleWorld);
     this.fx.tracer(this.player.vm.muzzleWorld, end);
     if (!hit) return;
@@ -464,14 +576,20 @@ class Game {
     const remoteId = mesh.userData.remoteId as string | undefined;
     const isEntity = botId || remoteId;
     if (isEntity) {
+      const targetId = botId ?? remoteId!;
+      // TDM friendly fire: shooting an ally just sparks, no damage/no hitmarker
+      if (this.gameMode === 'tdm' && this.teams.get(targetId) === this.teams.get(this.myId)) {
+        this.fx.sparks(hit.point, 0x8a8f70, 4);
+        return;
+      }
       this.fx.sparks(hit.point, 0xb03226, 6);
       this.audio.hit();
       this.hud.hitmarker(!!hit.headshot);
-      const targetId = botId ?? remoteId!;
       if (this.mode === 'client') {
         this.client?.send({ t: 'hit', tg: targetId, hs: hit.headshot ? 1 : 0, o: [origin.x, origin.y, origin.z], d: [dir.x, dir.y, dir.z] });
       } else {
-        const dmg = CFG.damage * (hit.headshot ? CFG.headshotMul : 1);
+        const spec = this.player.currentSpec;
+        const dmg = spec.damage * (hit.headshot ? spec.headshotMul : 1);
         const bot = this.bots.get(targetId);
         const rp = this.remotes.get(targetId);
         if (bot && bot.alive) {
@@ -491,32 +609,44 @@ class Game {
   private onBotShot(shot: BotShot) {
     this.fx.tracer(shot.from, shot.to, 0xff9c5b);
     if (!shot.targetId) return;
+    // TDM: bots never target teammates, but guard anyway
+    if (this.gameMode === 'tdm' && this.teams.get(shot.targetId) !== undefined
+        && this.teams.get(shot.targetId) === this.bots.get(this.shooterBotId(shot))?.team) return;
     if (this.mode === 'offline') {
       if (shot.targetId === this.myId) {
         const died = this.player.takeDamage(shot.dmg, performance.now());
         this.hud.damageFlash();
-        if (died) this.afterDamage(this.myId, this.lastBotShooter(shot), 'BOT', shot.headshot, true);
+        if (died) this.afterDamage(this.myId, this.lastBotShooter(shot), this.bots.get(this.lastBotShooter(shot))?.name ?? 'BOT', shot.headshot, true);
       } else {
         const victim = this.bots.get(shot.targetId);
-        if (victim) {
+        if (victim && victim.alive) {
           const died = victim.takeDamage(shot.dmg, performance.now(), shot.from);
-          if (died) this.afterDamage(shot.targetId, this.lastBotShooter(shot), 'BOT', shot.headshot, true);
+          if (died) this.afterDamage(shot.targetId, this.lastBotShooter(shot), this.bots.get(this.lastBotShooter(shot))?.name ?? 'BOT', shot.headshot, true);
         }
       }
     } else if (this.mode === 'host') {
       if (shot.targetId === this.myId) {
         const died = this.player.takeDamage(shot.dmg, performance.now());
         this.hud.damageFlash();
-        if (died) this.afterDamage(this.myId, this.lastBotShooter(shot), 'BOT', shot.headshot, true);
+        if (died) this.afterDamage(this.myId, this.lastBotShooter(shot), this.bots.get(this.lastBotShooter(shot))?.name ?? 'BOT', shot.headshot, true);
       } else {
         const rp = this.remotes.get(shot.targetId);
         if (rp && rp.alive) {
           rp.hp = Math.max(0, rp.hp - shot.dmg);
           this.host?.broadcast({ t: 'ev', k: 'dmg', i: shot.targetId, amt: shot.dmg } as HostMsg);
-          if (rp.hp <= 0) this.afterDamage(shot.targetId, this.lastBotShooter(shot), 'BOT', shot.headshot, true);
+          if (rp.hp <= 0) this.afterDamage(shot.targetId, this.lastBotShooter(shot), this.bots.get(this.lastBotShooter(shot))?.name ?? 'BOT', shot.headshot, true);
         }
       }
     }
+  }
+
+  private shooterBotId(shot: BotShot): string {
+    let best = '', bestD = Infinity;
+    this.bots.forEach((b, id) => {
+      const d = b.pos.distanceTo(shot.from);
+      if (d < bestD) { bestD = d; best = id; }
+    });
+    return best;
   }
 
   private lastBotShooter(shot: BotShot): string {
@@ -548,13 +678,66 @@ class Game {
       rp.hp = 0; rp.alive = false;
       this.hostRespawns.set(victimId, performance.now() + CFG.respawnDelay * 1000);
     }
-    if (this.mode !== 'client' && this.scores.get(killerId) && this.scores.get(killerId)!.k >= CFG.targetKills) this.endMatch();
+    if (this.mode !== 'client' && this.gameMode === 'dm' && killerId !== victimId
+        && this.scores.get(killerId) && this.scores.get(killerId)!.k >= CFG.targetKills) {
+      this.endMatch(); return;
+    }
+    if (this.mode === 'offline') {
+      const myKills = this.scores.get(this.myId)?.k ?? 0;
+      if (this.gameMode === 'gun' && killerId === this.myId) {
+        const next = myKills; // ladder slot == kill count
+        if (next >= GUN_GAME_LADDER.length) { this.endMatch(); return; }
+        this.player.switchWeapon(GUN_GAME_LADDER[next]);
+        this.player.refillAll();
+      }
+      if (this.gameMode === 'tdm') {
+        const [a, b] = this.teamKillTotals();
+        if (a >= CFG.tdmTargetKills || b >= CFG.tdmTargetKills) { this.endMatch(); return; }
+      }
+      if (this.gameMode === 'survival' && this.bots.has(victimId)) {
+        // dead survival bots stay dead; wave clears when none left
+        const aliveLeft = [...this.bots.values()].filter(b => b.alive).length;
+        this.lastWaveAlive = aliveLeft + this.survPending;
+        if (aliveLeft === 0 && this.survPending > 0) {
+          // top-up remaining bots of this wave
+          const add = Math.min(this.survPending, CFG.survivalMaxAlive - aliveLeft);
+          this.survPending -= add;
+          for (let i = 0; i < add; i++) {
+            const bot = this.addBot(this.diff, {
+              idx: this.bots.size,
+              hpScale: Math.min(2.2, 1 + 0.12 * (this.survWave - 1)),
+              dmgScale: Math.min(2.2, 1 + 0.09 * (this.survWave - 1)),
+              noRespawn: true,
+            });
+            bot.spawnAt(this.world.pickSpawn(this.alivePositions()));
+          }
+        } else if (aliveLeft === 0 && this.survPending === 0) {
+          this.survIntermission = performance.now() + CFG.survivalIntermission * 1000;
+          this.hud.toast(`WAVE ${this.survWave} CLEARED`, 1800);
+        }
+      }
+    }
+  }
+
+  private teamKillTotals(): [number, number] {
+    let a = 0, b = 0;
+    this.scores.forEach((s, id) => {
+      const t = this.teams.get(id) ?? (id === this.myId ? 0 : 1);
+      if (t === 0) a += s.k; else b += s.k;
+    });
+    return [a, b];
   }
 
   private onLocalDeath() {
     this.player.alive = false;
     this.player.enabled = false;
     this.touch.setEnabled(false); // hide touch UI during the respawn overlay
+    if (this.mode === 'offline' && this.gameMode === 'survival') {
+      // no respawns in survival — end shortly
+      this.hud.showRespawn(true, 0);
+      setTimeout(() => { if (this.state === 'playing') this.endMatch(); }, 1400);
+      return;
+    }
     this.respawnDeadline = performance.now() + CFG.respawnDelay * 1000;
     this.hud.showRespawn(true, CFG.respawnDelay);
     this.expectUnlock = false;
@@ -592,20 +775,24 @@ class Game {
 
   private restartMatch() {
     if (this.mode === 'client') return;
-    this.matchTime = CFG.matchTime;
-    this.scores.forEach(s => { s.k = 0; s.d = 0; });
-    this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff } } as HostMsg);
-    this.remotes.forEach((rp, id) => {
-      rp.hp = 100;
-      const p = this.world.pickSpawn(this.alivePositions());
-      this.host?.send(this.connOf(id), { t: 'ev', k: 'spawn', i: id, p: [p.x, p.y, p.z] } as HostMsg);
-    });
-    this.bots.forEach(b => b.spawnAt(this.world.pickSpawn(this.alivePositions())));
-    this.player.spawnAt(this.world.pickSpawn(this.alivePositions()));
-    this.player.enabled = true;
+    this.resetWorldEntities();
+    this.scores.set(this.myId, { k: 0, d: 0 });
+    this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
+    this.initModeState(this.gameMode === 'gun' ? 5 : this.offlineBotCount);
+    if (this.mode === 'host') {
+      this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff } } as HostMsg);
+      this.remotes.forEach((rp, id) => {
+        if (!this.scores.has(id)) this.scores.set(id, { k: 0, d: 0 });
+        rp.hp = 100;
+        const p = this.world.pickSpawn(this.alivePositions());
+        this.host?.send(this.connOf(id), { t: 'ev', k: 'spawn', i: id, p: [p.x, p.y, p.z] } as HostMsg);
+      });
+    }
     this.hud.setKD(0, 0);
     this.enterMatch();
   }
+
+  private offlineBotCount = 5;
 
   private endMatch() {
     const board: [string, string, number, number][] = [];
@@ -617,7 +804,18 @@ class Game {
     this.player.enabled = false;
     this.touch.setEnabled(false);
     this.hud.show(false);
+    this.hud.showRespawn(false);
     this.audio.matchEnd();
+    if (this.mode === 'offline' && this.gameMode === 'survival') {
+      const k = this.scores.get(this.myId)?.k ?? 0;
+      this.menus.showSurvivalEnd(Math.max(1, this.survWave), k, this.names.get(this.myId) ?? 'YOU');
+      return;
+    }
+    if (this.mode === 'offline' && this.gameMode === 'tdm') {
+      const [a, b] = this.teamKillTotals();
+      this.menus.showTeamEnd(a, b, this.names.get(this.myId) ?? 'YOU', a >= b);
+      return;
+    }
     this.host?.broadcast({ t: 'ev', k: 'end', board } as HostMsg);
     this.menus.showEnd(board, this.myId, this.mode !== 'client');
   }
@@ -699,7 +897,7 @@ class Game {
     this.hud.scoreboard(show, rows, this.names.get(this.myId) ?? '');
   }
 
-  private onResize = () => this.world.resize();
+  private onResize = () => this.applyLayout();
   private onBeforeUnload = () => {
     if (this.mode === 'client') this.client?.send({ t: 'bye' });
   };
@@ -737,9 +935,13 @@ class Game {
     // bots (offline & host)
     if (this.mode !== 'client') {
       const targets: BotTarget[] = [
-        { id: this.myId, pos: this.player.pos, alive: this.player.alive, isLocal: true },
+        { id: this.myId, pos: this.player.pos, alive: this.player.alive, isLocal: true, team: this.teams.get(this.myId) ?? -1 },
       ];
-      this.remotes.forEach((rp, id) => targets.push({ id, pos: rp.group.position, alive: rp.alive, isLocal: false }));
+      this.remotes.forEach((rp, id) => targets.push({ id, pos: rp.group.position, alive: rp.alive, isLocal: false, team: this.teams.get(id) ?? -1 }));
+      // TDM: bots also fight each other -> include bots as targets
+      if (this.mode === 'offline' && this.gameMode === 'tdm') {
+        this.bots.forEach((b, id) => targets.push({ id, pos: b.pos, alive: b.alive, isLocal: false, team: b.team }));
+      }
       this.bots.forEach(b => b.update(dt, now, targets));
       // remote human respawns (killed by bots/clients)
       this.hostRespawns.forEach((at, id) => {
@@ -751,6 +953,15 @@ class Game {
           this.host?.broadcast({ t: 'ev', k: 'spawn', i: id, p: [p.x, p.y, p.z] } as HostMsg);
         }
       });
+      // survival wave manager
+      if (this.mode === 'offline' && this.gameMode === 'survival') {
+        this.survElapsed += dt;
+        const waveActive = this.lastWaveAlive > 0 || this.survPending > 0;
+        if (!waveActive && this.survIntermission > 0 && now >= this.survIntermission) {
+          this.survIntermission = 0;
+          this.spawnSurvivalWave();
+        }
+      }
     }
 
     // remote/bot visuals (client interp; host direct)
@@ -762,16 +973,44 @@ class Game {
     }
 
     // match timer
+    let timerText = '', modeText = '';
     if (this.mode !== 'client') {
-      this.matchTime -= dt;
-      if (this.matchTime <= 0) { this.matchTime = 0; this.endMatch(); return; }
+      if (this.mode === 'offline' && this.gameMode === 'survival') {
+        timerText = fmtTime(this.survElapsed);
+        const left = [...this.bots.values()].filter(b => b.alive).length + this.survPending;
+        modeText = this.lastWaveAlive > 0 || this.survPending > 0
+          ? `WAVE ${this.survWave} — ${left} LEFT`
+          : this.survIntermission > 0
+            ? `NEXT WAVE IN ${Math.max(1, Math.ceil((this.survIntermission - now) / 1000))}`
+            : 'SURVIVAL';
+      } else if (this.mode === 'offline' && this.gameMode === 'gun') {
+        this.matchTime -= dt;
+        if (this.matchTime <= 0) { this.matchTime = 0; this.endMatch(); return; }
+        const k = this.scores.get(this.myId)?.k ?? 0;
+        timerText = fmtTime(this.matchTime);
+        modeText = `GUN ${Math.min(k + 1, GUN_GAME_LADDER.length)}/${GUN_GAME_LADDER.length} — ${this.player.currentSpec.name}`;
+      } else if (this.mode === 'offline' && this.gameMode === 'tdm') {
+        this.matchTime -= dt;
+        if (this.matchTime <= 0) { this.matchTime = 0; this.endMatch(); return; }
+        const [a, b] = this.teamKillTotals();
+        timerText = fmtTime(this.matchTime);
+        modeText = `ALLIES ${a} — ${b} ENEMY`;
+      } else {
+        this.matchTime -= dt;
+        if (this.matchTime <= 0) { this.matchTime = 0; this.endMatch(); return; }
+        timerText = fmtTime(this.matchTime);
+        modeText = this.mode === 'offline' ? 'OFFLINE DEATHMATCH' : 'ONLINE DEATHMATCH';
+      }
       // host snapshot broadcast
       if (this.mode === 'host' && now - this.lastSnapSent >= 1000 / CFG.snapRate) {
         this.lastSnapSent = now;
         this.sendSnapshot();
       }
+    } else {
+      timerText = fmtTime(this.matchTime);
+      modeText = 'ONLINE DEATHMATCH';
     }
-    this.hud.setTimer(fmtTime(this.matchTime), this.mode === 'offline' ? 'OFFLINE DEATHMATCH' : 'ONLINE DEATHMATCH');
+    this.hud.setTimer(timerText, modeText);
 
     // client input send
     if (this.mode === 'client' && this.player.alive && now - this.lastInputSent >= 1000 / CFG.inputRate) {
@@ -818,6 +1057,7 @@ class Game {
     cancelAnimationFrame(this.raf);
     this.cleanupNet();
     window.removeEventListener('resize', this.onResize);
+    window.visualViewport?.removeEventListener?.('resize', this.onResize);
     document.removeEventListener('pointerlockchange', this.onPointerLock);
     window.removeEventListener('keydown', this.onKeydown);
     window.removeEventListener('keyup', this.onKeyup);

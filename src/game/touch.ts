@@ -1,7 +1,9 @@
-// NEON STRIKE 3D - mobile touch controls: dynamic joystick, look drag, action buttons
+// DESERT STRIKE 3D - mobile touch controls: dynamic joystick, look drag,
+// fire-button drag-aim, crouch/weapon buttons, forced-landscape support.
 // Detection order: URL param (?touch=1/0) > localStorage pref > auto (touch capability)
 
 export const TOUCH_LOOK_SENS = 0.0042; // radians per screen px (thumb), multiplied by user sensitivity
+const FIRE_DRAG_SENS = 0.75;           // fire-drag look sensitivity factor vs normal look
 const JOY_RADIUS = 56;                 // px, max knob travel
 const TAP_MS = 200;                    // tap-on-look-zone fires a single shot
 const TAP_MOVE = 14;                   // px of drift still counted as a tap
@@ -36,6 +38,8 @@ export interface TouchInput {
   consumeJump(): boolean;
   consumeReload(): boolean;
   consumeTapFire(): boolean;
+  consumeCrouchToggle(): boolean;
+  consumeWeaponCycle(): boolean;
 }
 
 export interface TouchCallbacks {
@@ -57,6 +61,8 @@ export class TouchControls implements TouchInput {
   private lookLX = 0; private lookLY = 0;
   private lookMoved = 0;
   private lookT0 = 0;
+  private fireDragId = -1;
+  private fireDragLX = 0; private fireDragLY = 0;
 
   private fwdV = 0;
   private strafeV = 0;
@@ -64,6 +70,8 @@ export class TouchControls implements TouchInput {
   private jumpQ = false;
   private reloadQ = false;
   private tapQ = false;
+  private crouchQ = false;
+  private wpnQ = false;
 
   private lookAccX = 0;
   private lookAccY = 0;
@@ -78,9 +86,11 @@ export class TouchControls implements TouchInput {
       <div class="ns-tbtn fire">FIRE</div>
       <div class="ns-tbtn jump">JUMP</div>
       <div class="ns-tbtn reload">RLD</div>
+      <div class="ns-tbtn crouch">CRCH</div>
+      <div class="ns-tbtn wpn">WPN</div>
       <div class="ns-tbtn sb">LIST</div>
       <div class="ns-tbtn pause">II</div>
-      <div class="ns-rotate"><div class="ns-rotate-icon"></div><div>ROTATE YOUR DEVICE<br /><span>landscape gives the best view</span></div></div>
+      <div class="ns-rotate-hint ns-hidden"><span class="ns-rotate-icon-sm"></span>ROTATE YOUR PHONE<br /><span>for a natural view — the game already runs landscape</span></div>
     `;
     parent.appendChild(this.root);
     this.moveZone = this.root.querySelector('.ns-zone-move')!;
@@ -97,12 +107,26 @@ export class TouchControls implements TouchInput {
     window.addEventListener('touchcancel', this.onTouchEnd, { passive: false });
 
     // buttons
-    this.bindHold(this.fireBtn, () => { this.fireHeld = true; this.fireBtn.classList.add('on'); }, () => { this.fireHeld = false; this.fireBtn.classList.remove('on'); });
+    this.bindHold(this.fireBtn,
+      () => { this.fireHeld = true; this.fireBtn.classList.add('on'); },
+      () => { this.fireHeld = false; this.fireBtn.classList.remove('on'); });
     this.bindHold(this.root.querySelector('.ns-tbtn.jump')!, () => { this.jumpQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.reload')!, () => { this.reloadQ = true; }, undefined);
+    this.bindHold(this.root.querySelector('.ns-tbtn.crouch')!, () => { this.crouchQ = true; }, undefined);
+    this.bindHold(this.root.querySelector('.ns-tbtn.wpn')!, () => { this.wpnQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.sb')!, () => this.cb.onScoreboard(true), () => this.cb.onScoreboard(false));
     const pauseBtn = this.root.querySelector('.ns-tbtn.pause')!;
     pauseBtn.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); this.cb.onPause(); }, { passive: false });
+
+    // fire-button drag also aims (PUBG-style): track its own touch id
+    this.fireBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (this.fireDragId !== -1) return;
+      const t = e.changedTouches[0];
+      this.fireDragId = t.identifier;
+      const [mx, my] = this.mapXY(t.clientX, t.clientY);
+      this.fireDragLX = mx; this.fireDragLY = my;
+    }, { passive: false });
 
     // block iOS pinch/double-tap zoom & scroll while the game is mounted
     document.addEventListener('gesturestart', this.preventDefault);
@@ -112,6 +136,18 @@ export class TouchControls implements TouchInput {
   }
 
   private preventDefault = (e: Event) => e.preventDefault();
+
+  /**
+   * Map screen (client) coords into the game's element space.
+   * When the phone is portrait we render the whole game rotated 90°
+   * (.ns-forced-landscape), so touches must be counter-rotated.
+   */
+  private mapXY(cx: number, cy: number): [number, number] {
+    if (this.parent.classList.contains('ns-forced-landscape')) {
+      return [window.innerWidth - cy, cx];
+    }
+    return [cx, cy];
+  }
 
   private bindHold(el: HTMLElement, down: () => void, up: (() => void) | undefined) {
     el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add('on'); down(); }, { passive: false });
@@ -126,7 +162,8 @@ export class TouchControls implements TouchInput {
     if (this.joyId !== -1) return;
     const t = e.changedTouches[0];
     this.joyId = t.identifier;
-    this.joyCX = t.clientX; this.joyCY = t.clientY;
+    const [mx, my] = this.mapXY(t.clientX, t.clientY);
+    this.joyCX = mx; this.joyCY = my;
     this.joyEl.style.left = this.joyCX + 'px';
     this.joyEl.style.top = this.joyCY + 'px';
     this.joyEl.style.display = 'block';
@@ -138,7 +175,8 @@ export class TouchControls implements TouchInput {
     if (this.lookId !== -1) return;
     const t = e.changedTouches[0];
     this.lookId = t.identifier;
-    this.lookLX = t.clientX; this.lookLY = t.clientY;
+    const [mx, my] = this.mapXY(t.clientX, t.clientY);
+    this.lookLX = mx; this.lookLY = my;
     this.lookMoved = 0;
     this.lookT0 = performance.now();
   };
@@ -148,8 +186,9 @@ export class TouchControls implements TouchInput {
       const t = e.changedTouches[i];
       if (t.identifier === this.joyId) {
         e.preventDefault();
-        let dx = t.clientX - this.joyCX;
-        let dy = t.clientY - this.joyCY;
+        const [mx, my] = this.mapXY(t.clientX, t.clientY);
+        let dx = mx - this.joyCX;
+        let dy = my - this.joyCY;
         const len = Math.hypot(dx, dy);
         if (len > JOY_RADIUS) { dx = (dx / len) * JOY_RADIUS; dy = (dy / len) * JOY_RADIUS; }
         this.knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
@@ -157,10 +196,20 @@ export class TouchControls implements TouchInput {
         this.fwdV = -dy / JOY_RADIUS;
       } else if (t.identifier === this.lookId) {
         e.preventDefault();
-        const dx = t.clientX - this.lookLX;
-        const dy = t.clientY - this.lookLY;
-        this.lookLX = t.clientX; this.lookLY = t.clientY;
+        const [mx, my] = this.mapXY(t.clientX, t.clientY);
+        const dx = mx - this.lookLX;
+        const dy = my - this.lookLY;
+        this.lookLX = mx; this.lookLY = my;
         this.lookMoved += Math.abs(dx) + Math.abs(dy);
+        this.lookAccX += dx;
+        this.lookAccY += dy;
+      } else if (t.identifier === this.fireDragId) {
+        e.preventDefault();
+        // dragging on the FIRE button also turns the view
+        const [mx, my] = this.mapXY(t.clientX, t.clientY);
+        const dx = (mx - this.fireDragLX) * FIRE_DRAG_SENS;
+        const dy = (my - this.fireDragLY) * FIRE_DRAG_SENS;
+        this.fireDragLX = mx; this.fireDragLY = my;
         this.lookAccX += dx;
         this.lookAccY += dy;
       }
@@ -179,6 +228,8 @@ export class TouchControls implements TouchInput {
         const dt = performance.now() - this.lookT0;
         if (dt < TAP_MS && this.lookMoved < TAP_MOVE) this.tapQ = true; // quick tap = single shot
         this.lookId = -1;
+      } else if (t.identifier === this.fireDragId) {
+        this.fireDragId = -1;
       }
     }
   };
@@ -196,6 +247,20 @@ export class TouchControls implements TouchInput {
   consumeJump() { const v = this.jumpQ; this.jumpQ = false; return v; }
   consumeReload() { const v = this.reloadQ; this.reloadQ = false; return v; }
   consumeTapFire() { const v = this.tapQ; this.tapQ = false; return v; }
+  consumeCrouchToggle() { const v = this.crouchQ; this.crouchQ = false; return v; }
+  consumeWeaponCycle() { const v = this.wpnQ; this.wpnQ = false; return v; }
+
+  // ---------- rotate hint banner (non-blocking) ----------
+  showRotateHint(v: boolean) {
+    const el = this.root.querySelector('.ns-rotate-hint') as HTMLElement | null;
+    if (!el) return;
+    el.classList.toggle('ns-hidden', !v);
+    if (v) {
+      clearTimeout(this.hintTimer);
+      this.hintTimer = setTimeout(() => el.classList.add('ns-hidden'), 3500) as unknown as number;
+    }
+  }
+  private hintTimer: number | undefined;
 
   // ---------- visibility ----------
   setEnabled(v: boolean) {
@@ -204,10 +269,11 @@ export class TouchControls implements TouchInput {
   }
 
   reset() {
-    this.joyId = -1; this.lookId = -1;
+    this.joyId = -1; this.lookId = -1; this.fireDragId = -1;
     this.fwdV = 0; this.strafeV = 0;
     this.fireHeld = false;
     this.jumpQ = false; this.reloadQ = false; this.tapQ = false;
+    this.crouchQ = false; this.wpnQ = false;
     this.lookAccX = 0; this.lookAccY = 0;
     this.joyEl.style.display = 'none';
     this.fireBtn.classList.remove('on');

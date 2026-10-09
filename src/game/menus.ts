@@ -1,12 +1,12 @@
 // DESERT STRIKE 3D - menu system (DOM)
-import { Difficulty } from './constants';
+import { Difficulty, GameMode } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help';
 
 export interface MenuCallbacks {
-  onStartOffline(name: string, bots: number, diff: Difficulty): void;
+  onStartOffline(name: string, bots: number, diff: Difficulty, mode: GameMode): void;
   onHost(name: string, bots: number, diff: Difficulty): void;
   onJoin(name: string, code: string): void;
   onResume(): void;
@@ -22,6 +22,7 @@ export class Menus {
   private codeInput!: HTMLInputElement;
   private botsInput!: HTMLInputElement;
   private diff: Difficulty = 'medium';
+  private mode: GameMode = 'dm';
   private lobbyCodeEl!: HTMLElement;
   private lobbyPlayersEl!: HTMLElement;
   private lobbyNoteEl!: HTMLElement;
@@ -117,21 +118,50 @@ export class Menus {
   private buildOffline() {
     const p = this.el(`<div>
       <div class="ns-panel-title">OFFLINE MATCH</div>
-      <div class="ns-subtitle">Deathmatch vs bots &bull; 5:00</div>
+      <div class="ns-subtitle">Pick a mode &bull; vs bots</div>
+      <div class="ns-field"><label>Game mode</label></div>
+      <div class="ns-mode-slot"></div>
       <div class="ns-field"><label>Bot difficulty</label></div>
       <div class="ns-diff-slot"></div>
-      <div class="ns-field"><label>Bots</label></div>
+      <div class="ns-field ns-bots-field"><label>Bots</label></div>
       <div class="ns-bots-slot"></div>
+      <div class="ns-mode-desc"></div>
       <button class="ns-btn primary ns-go">Start Match</button>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
+    const modeSeg = this.el(`<div class="ns-seg ns-mode-seg">
+      <button data-m="dm" class="on">DM</button><button data-m="tdm">TDM</button><button data-m="survival">SURVIVAL</button><button data-m="gun">GUN GAME</button>
+    </div>`);
+    const modeDesc = p.querySelector('.ns-mode-desc') as HTMLElement;
+    const botsField = p.querySelector('.ns-bots-field') as HTMLElement;
+    const botsSlot = p.querySelector('.ns-bots-slot') as HTMLElement;
+    const DESCS: Record<GameMode, string> = {
+      dm: 'Free-for-all. First to 25 kills or best score in 5:00 wins.',
+      tdm: 'You + allied bots vs enemy squad. First team to 40 kills wins.',
+      survival: 'Endless waves. Each wave is bigger and meaner. No respawns!',
+      gun: 'Every kill unlocks the next weapon. Finish all 7 guns to win.',
+    };
+    const applyMode = (m: GameMode) => {
+      this.mode = m;
+      modeDesc.textContent = DESCS[m];
+      const hideBots = m === 'survival' || m === 'gun';
+      botsField.style.display = hideBots ? 'none' : '';
+      botsSlot.style.display = hideBots ? 'none' : '';
+    };
+    modeSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      modeSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      applyMode(b.dataset.m as GameMode);
+    }));
+    applyMode('dm');
     const diffSlot = p.querySelector('.ns-diff-slot')!;
     diffSlot.replaceWith(this.diffSeg());
+    p.querySelector('.ns-mode-slot')!.replaceWith(modeSeg);
     const bs = this.botsSeg();
     p.querySelector('.ns-bots-slot')!.replaceWith(bs.el);
     p.querySelector('.ns-go')!.addEventListener('click', () => {
       this.offlineBots = bs.get();
-      this.cb.onStartOffline(this.playerName(), this.offlineBots, this.diff);
+      this.cb.onStartOffline(this.playerName(), this.offlineBots, this.diff, this.mode);
     });
     p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
     this.addPanel('offline', p);
@@ -246,17 +276,22 @@ export class Menus {
     const p = this.el(`<div>
       <div class="ns-panel-title">HOW TO PLAY</div>
       <div class="ns-help">
-        <b>Goal:</b> Frag more enemies than anyone before the timer ends.<br /><br />
-        <span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> move &nbsp;&bull;&nbsp;
-        <span class="k">SHIFT</span> sprint &nbsp;&bull;&nbsp; <span class="k">SPACE</span> jump<br />
-        <b>Mouse</b> aim &nbsp;&bull;&nbsp; <b>Left click</b> shoot (hold for auto) &nbsp;&bull;&nbsp; <span class="k">R</span> reload<br />
-        <span class="k">TAB</span> scoreboard &nbsp;&bull;&nbsp; <span class="k">ESC</span> pause / release mouse<br /><br />
+        <b>Weapons (carry all 7):</b> <span class="k">1</span>..<span class="k">7</span> pick &bull;
+        <span class="k">Q</span> or mouse wheel cycles &bull; <b>WPN</b> button on mobile cycles.<br />
+        M9 pistol &bull; MP5 &bull; M870 shotgun (8 pellets) &bull; M4A1 &bull; MK14 DMR &bull; M249 LMG (80 rd) &bull; AWM sniper.<br /><br />
+        <b>Crouch:</b> <span class="k">C</span> toggles, <span class="k">CTRL</span> holds &bull; <b>CRCH</b> button on mobile.
+        Slower, but far more accurate and a smaller target.<br />
+        <b>Fire-drag (mobile):</b> keep <b>FIRE</b> held and drag it to aim while shooting.<br /><br />
+        <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40) &bull;
+        Survival (endless waves, no respawns) &bull; Gun Game (one kill per weapon, finish all 7).<br /><br />
+        <b>Map:</b> two wooden watchtowers, tents, sandbags, barrels &amp; barriers are real cover — use them.
         <b>Headshots</b> deal double damage. Health regenerates after 5s out of combat.<br />
-        <b>Online:</b> create a match, share the room code with a friend, and start fragging. The match runs peer-to-peer (host is the scoreboard authority), so stay in the game until it ends.<br /><br />
-        <b>Mobile &amp; tablets:</b> touch controls turn on automatically.<br />
-        Left stick moves (push fully forward to sprint) &bull; drag the right side of the screen to aim &bull;
-        <b>FIRE</b> shoots (hold for auto) &bull; a quick tap on the right side fires a single shot &bull;
-        <b>JUMP</b> / <b>RLD</b> buttons &bull; <b>II</b> pauses &bull; <b>LIST</b> shows the scoreboard.
+        <b>Online:</b> create a match, share the room code, start fragging (P2P, host is authority).<br /><br />
+        <b>Mobile &amp; tablets:</b> touch controls turn on automatically and the game always renders landscape —
+        even if you hold the phone upright (a hint reminds you to rotate).<br />
+        Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots (hold = auto) &bull;
+        drag the FIRE button itself to aim while firing &bull; <b>CRCH</b> crouches &bull; <b>WPN</b> swaps guns &bull;
+        <b>JUMP</b>/<b>RLD</b> &bull; <b>II</b> pauses &bull; <b>LIST</b> scoreboard.
       </div>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
@@ -311,6 +346,32 @@ export class Menus {
       this.endBoardEl.appendChild(row);
     }
     this.restartBtn.style.display = canRestart ? '' : 'none';
+    this.show('end');
+  }
+
+  /** survival-specific end screen (wave reached instead of scoreboard ranking) */
+  showSurvivalEnd(wave: number, kills: number, myName: string) {
+    this.endTitleEl.textContent = 'OVERRUN';
+    this.endTitleEl.className = 'ns-end-title lose';
+    this.endSubEl.textContent = `${myName} HELD OUT UNTIL WAVE ${wave} — ${kills} KILLS`;
+    this.endBoardEl.innerHTML = '';
+    const head = this.el(`<div class="ns-sb-row head"><span>Stat</span><span></span><span></span></div>`);
+    this.endBoardEl.appendChild(head);
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>Wave reached</span><span>${wave}</span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row"><span>Kills</span><span>${kills}</span><span></span></div>`));
+    this.restartBtn.style.display = '';
+    this.show('end');
+  }
+
+  /** TDM end screen: team totals */
+  showTeamEnd(allies: number, enemies: number, myName: string, iWon: boolean) {
+    this.endTitleEl.textContent = iWon ? 'VICTORY!' : 'DEFEAT';
+    this.endTitleEl.className = 'ns-end-title ' + (iWon ? 'win' : 'lose');
+    this.endSubEl.textContent = `ALLIES ${allies} — ${enemies} ENEMIES`;
+    this.endBoardEl.innerHTML = '';
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>${esc(myName)}'s team</span><span>${allies}</span><span></span></div>`));
+    this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row"><span>Enemy team</span><span>${enemies}</span><span></span></div>`));
+    this.restartBtn.style.display = '';
     this.show('end');
   }
 

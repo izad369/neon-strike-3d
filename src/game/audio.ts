@@ -86,4 +86,6 @@ export class AudioFX {
   countdown() { this.tone(760, 0.18, 0.1, 'square'); }
   matchEnd() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.tone(f, 0.2, 0.22, 'triangle'), i * 130)); }
   empty() { this.tone(220, 0.1, 0.05, 'square', 180); }
+  weaponSwitch() { this.burst(0.14, 0.05, 1100, 1.4); setTimeout(() => this.tone(340, 0.07, 0.05, 'square'), 60); }
+  waveStart() { this.tone(196, 0.35, 0.3, 'sawtooth', 98); setTimeout(() => this.tone(262, 0.3, 0.25, 'sawtooth', 131), 260); }
 }
