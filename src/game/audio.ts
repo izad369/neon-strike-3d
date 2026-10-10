@@ -87,5 +87,8 @@ export class AudioFX {
   matchEnd() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.tone(f, 0.2, 0.22, 'triangle'), i * 130)); }
   empty() { this.tone(220, 0.1, 0.05, 'square', 180); }
   weaponSwitch() { this.burst(0.14, 0.05, 1100, 1.4); setTimeout(() => this.tone(340, 0.07, 0.05, 'square'), 60); }
+  knife() { this.burst(0.2, 0.07, 2600, 3); setTimeout(() => this.burst(0.12, 0.05, 1800, 2.4), 40); }
   waveStart() { this.tone(196, 0.35, 0.3, 'sawtooth', 98); setTimeout(() => this.tone(262, 0.3, 0.25, 'sawtooth', 131), 260); }
+  pickup() { this.tone(700, 0.14, 0.06, 'triangle'); setTimeout(() => this.tone(1050, 0.14, 0.09, 'triangle'), 70); }
+  zoneWarn() { this.tone(150, 0.22, 0.28, 'sawtooth', 96); }
 }

@@ -1,12 +1,13 @@
 // DESERT STRIKE 3D - local player: input (keyboard/mouse + touch), physics,
-// shooting, weapon inventory (7 guns), crouch, aim down sights (ADS)
+// shooting, 3-slot loadout (primary / secondary pistol / knife), crouch, ADS.
+// Knives are melee + make you move faster (speedMul).
 import * as THREE from 'three';
 import { CFG, Vec3Arr } from './constants';
 import { World } from './world';
 import { ViewModel } from './viewmodel';
 import { AudioFX } from './audio';
 import { TouchInput, TOUCH_LOOK_SENS } from './touch';
-import { WeaponSpec, WEAPONS, DEFAULT_WEAPON } from './weapons';
+import { WeaponSpec, WEAPONS, DEFAULT_PRIMARY, DEFAULT_SECONDARY, DEFAULT_KNIFE } from './weapons';
 
 // Keyboard normalization: real browsers send e.code; synthetic/edge cases may only send e.key
 const KEY_FALLBACK: Record<string, string> = {
@@ -29,21 +30,25 @@ export class LocalPlayer {
   vel = new THREE.Vector3();
   yaw = Math.PI; pitch = 0;
   hp = CFG.playerHp;
+  armor = 0;             // BR vest: absorbs 60% of incoming damage until depleted
   alive = true;
   grounded = true;
   reloading = false;
   crouching = false;
   aiming = false;        // ADS held (mouse RMB) or toggled (touch AIM button)
   private aimAmt = 0;    // smoothed 0..1 blend used for fov/spread/speed/viewmodel
-  // --- weapon inventory (carries all guns, arcade style) ---
-  private mags: number[] = WEAPONS.map(w => w.magSize);
-  private weaponIdx = DEFAULT_WEAPON;
+  // --- 3-slot loadout: [0] primary gun, [1] secondary pistol, [2] knife ---
+  // loadout[i] = index into WEAPONS; -1 = empty slot (primary starts empty in BR)
+  private loadout: number[] = [DEFAULT_PRIMARY, DEFAULT_SECONDARY, DEFAULT_KNIFE];
+  private mags: number[] = [0, 0, -1]; // per-slot ammo; knife = -1 (infinite)
+  private slot = 0;
   private reloadEnd = 0;
   private lastFire = 0;
   private lastRegen = 0;
   private lastStep = 0;
   private curEye = CFG.eyeHeight;
   onWeaponSwitch: ((spec: WeaponSpec, slot: number) => void) | null = null;
+  onSlotsChange: (() => void) | null = null;
   onCrouchChange: ((crouching: boolean) => void) | null = null;
   onAimChange: ((aiming: boolean) => void) | null = null;
   private keys = new Set<string>();
@@ -56,6 +61,7 @@ export class LocalPlayer {
   onJump: (() => void) | null = null;
   onLand: (() => void) | null = null;
   private wasGrounded = true;
+  parachute = false; // BR drop: terminal-velocity fall, cleared on landing
 
   constructor(private world: World, camera: THREE.PerspectiveCamera, private audio: AudioFX, private dom: HTMLElement) {
     this.vm = new ViewModel(camera);
@@ -73,27 +79,93 @@ export class LocalPlayer {
   }
 
   // ---------- weapons ----------
-  get weaponIndex(): number { return this.weaponIdx; }
-  get currentSpec(): WeaponSpec { return WEAPONS[this.weaponIdx]; }
-  get ammo(): number { return this.mags[this.weaponIdx]; }
+  get weaponIndex(): number { return this.loadout[this.slot]; }
+  get currentSpec(): WeaponSpec { return WEAPONS[this.loadout[this.slot]] ?? WEAPONS[DEFAULT_PRIMARY]; }
+  get ammo(): number { return this.mags[this.slot]; }
+  get isKnife(): boolean { return this.currentSpec.cat === 'knife'; }
+  /** names for the HUD slot chips (— when the primary slot is empty) */
+  get slotNames(): [string, string, string] {
+    return [0, 1, 2].map(i => this.loadout[i] < 0 ? '—' : WEAPONS[this.loadout[i]].short) as [string, string, string];
+  }
+  get activeSlot(): number { return this.slot; }
 
-  switchWeapon(i: number, silent = false) {
-    const idx = ((i % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
-    if (idx === this.weaponIdx) return;
-    this.weaponIdx = idx;
+  /** select one of the 3 slots; empty slots are refused (soft click) */
+  switchSlot(s: number, silent = false): boolean {
+    const idx = ((s % 3) + 3) % 3;
+    if (idx === this.slot) return true;
+    if (this.loadout[idx] < 0) { this.audio.empty(); return false; } // nothing there yet (BR)
+    this.slot = idx;
     this.reloading = false; // cancel reload on swap
     this.lastFire = performance.now(); // brief raise delay
-    this.vm.setWeapon(WEAPONS[idx]);
+    this.vm.setWeapon(WEAPONS[this.loadout[idx]]);
     if (!silent) this.audio.weaponSwitch();
-    this.onWeaponSwitch?.(WEAPONS[idx], idx);
+    this.onWeaponSwitch?.(WEAPONS[this.loadout[idx]], idx);
+    this.onSlotsChange?.();
+    return true;
   }
 
-  cycleWeapon(dir = 1) { this.switchWeapon(this.weaponIdx + dir); }
+  cycleSlot(dir = 1) {
+    // cycle only over usable slots (skip an empty primary in BR)
+    for (let n = 1; n <= 3; n++) {
+      const s = ((this.slot + dir * n) % 3 + 3) % 3;
+      if (this.loadout[s] >= 0) { this.switchSlot(s); return; }
+    }
+  }
 
-  /** refill every magazine (respawn / survival intermission) */
+  /** legacy single-index switch used by gun game — assigns by category and equips */
+  switchWeapon(gunIdx: number, silent = false) {
+    this.giveWeapon(gunIdx, silent);
+  }
+
+  /** BR pickup / gun-game: assign a gun to the slot of its category and equip it */
+  giveWeapon(gunIdx: number, silent = false) {
+    const i = ((gunIdx % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+    const spec = WEAPONS[i];
+    const target = spec.cat === 'secondary' ? 1 : 0; // knives never arrive here
+    this.loadout[target] = i;
+    this.mags[target] = spec.magSize;
+    this.switchSlot(target, silent);
+    this.onSlotsChange?.();
+  }
+
+  /** BR knife pickup: swap the knife slot (keeps the movement-speed upgrade fresh) */
+  giveKnife(knifeIdx: number, silent = false) {
+    const i = ((knifeIdx % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+    this.loadout[2] = i;
+    if (this.slot === 2) this.vm.setWeapon(WEAPONS[i]);
+    else this.switchSlot(2, silent);
+    this.onSlotsChange?.();
+  }
+
+  /** refill both gun magazines (respawn / survival intermission) */
   refillAll() {
-    this.mags = WEAPONS.map(w => w.magSize);
+    [0, 1].forEach(i => { if (this.loadout[i] >= 0) this.mags[i] = WEAPONS[this.loadout[i]].magSize; });
+    this.mags[2] = -1;
     this.reloading = false;
+    this.onSlotsChange?.();
+  }
+
+  /** refill only the current weapon's magazine (BR ammo box) */
+  refillCurrent() {
+    if (this.slot !== 2 && this.loadout[this.slot] >= 0) {
+      this.mags[this.slot] = WEAPONS[this.loadout[this.slot]].magSize;
+    }
+    this.reloading = false;
+  }
+
+  heal(n: number) {
+    this.hp = Math.min(CFG.playerHp, this.hp + n);
+  }
+
+  /** BR start: pistol + knife only — loot a primary gun from the ground */
+  setBrLoadout() {
+    this.loadout = [-1, DEFAULT_SECONDARY, DEFAULT_KNIFE];
+    this.mags = [0, WEAPONS[DEFAULT_SECONDARY].magSize, -1];
+    this.armor = 0;
+    this.reloading = false;
+    this.slot = 1;
+    this.vm.setWeapon(WEAPONS[DEFAULT_SECONDARY]);
+    this.onSlotsChange?.();
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -103,15 +175,15 @@ export class LocalPlayer {
     this.keys.add(k);
     if (k === 'KeyR') this.tryReload();
     if (k === 'KeyC' && !e.repeat) this.toggleCrouch();
-    if (k === 'KeyQ' && !e.repeat) this.cycleWeapon(1);
-    const digit = /^(Digit|Numpad)([1-7])$/.exec(k);
-    if (digit && !e.repeat) this.switchWeapon(parseInt(digit[2], 10) - 1);
+    if (k === 'KeyQ' && !e.repeat) this.cycleSlot(1);
+    const digit = /^(Digit|Numpad)([1-3])$/.exec(k);
+    if (digit && !e.repeat) this.switchSlot(parseInt(digit[2], 10) - 1);
   };
   private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(normKey(e)); };
   private onWheel = (e: WheelEvent) => {
     if (!this.enabled || document.pointerLockElement === null) return;
     e.preventDefault();
-    this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+    this.cycleSlot(e.deltaY > 0 ? 1 : -1);
   };
 
   toggleCrouch() {
@@ -150,7 +222,8 @@ export class LocalPlayer {
 
   tryReload() {
     const spec = this.currentSpec;
-    if (!this.alive || this.reloading || this.mags[this.weaponIdx] >= spec.magSize) return;
+    if (spec.cat === 'knife') return; // knives never reload
+    if (!this.alive || this.reloading || this.mags[this.slot] >= spec.magSize) return;
     this.reloading = true;
     this.reloadEnd = performance.now() + spec.reloadTime * 1000;
     this.audio.reload();
@@ -161,12 +234,15 @@ export class LocalPlayer {
     this.vel.set(0, 0, 0);
     this.hp = CFG.playerHp;
     this.alive = true;
+    this.loadout = [DEFAULT_PRIMARY, DEFAULT_SECONDARY, DEFAULT_KNIFE];
     this.refillAll();
     this.crouching = false;
     this.setAim(false);
     this.aimAmt = 0;
-    this.switchWeapon(DEFAULT_WEAPON, true);
+    this.slot = 0;
+    this.vm.setWeapon(WEAPONS[DEFAULT_PRIMARY]);
     this.audio.spawnFx();
+    this.onSlotsChange?.();
   }
 
   get eyePos(): THREE.Vector3 {
@@ -202,7 +278,8 @@ export class LocalPlayer {
 
   takeDamage(amt: number, now: number): boolean {
     if (!this.alive) return false;
-    this.hp -= amt;
+    const dmg = this.absorb(amt);
+    this.hp -= dmg;
     this.lastRegen = now;
     if (this.hp <= 0) {
       this.hp = 0;
@@ -212,6 +289,14 @@ export class LocalPlayer {
     }
     this.audio.hurt();
     return false;
+  }
+
+  /** vest: soak 60% of damage into armor while it lasts */
+  private absorb(amt: number): number {
+    if (this.armor <= 0) return amt;
+    const soaked = Math.min(this.armor, amt * 0.6);
+    this.armor -= soaked;
+    return amt - soaked;
   }
 
   /** main per-frame update; returns fire event if a shot was fired this frame */
@@ -237,7 +322,7 @@ export class LocalPlayer {
     // reload finish
     if (this.reloading && performance.now() >= this.reloadEnd) {
       this.reloading = false;
-      this.mags[this.weaponIdx] = this.currentSpec.magSize;
+      if (this.loadout[this.slot] >= 0) this.mags[this.slot] = this.currentSpec.magSize;
     }
 
     // touch look (accumulated thumb drag)
@@ -252,7 +337,7 @@ export class LocalPlayer {
     if (this.keys.has('ControlLeft') || this.keys.has('ControlRight')) this.setCrouch(true);
     else if (this.keys.has('KeyC')) { /* toggle handled on keydown */ }
     if (this.touch && this.touch.consumeCrouchToggle()) this.toggleCrouch();
-    if (this.touch && this.touch.consumeWeaponCycle()) this.cycleWeapon(1);
+    if (this.touch && this.touch.consumeWeaponCycle()) this.cycleSlot(1);
     if (this.touch && this.touch.consumeAimToggle()) this.toggleAim();
 
     // aim blend (ADS)
@@ -267,6 +352,7 @@ export class LocalPlayer {
     let speed = sprint ? CFG.sprintSpeed : CFG.walkSpeed;
     if (this.crouching) speed *= CFG.crouchSpeedMul;
     if (this.aimAmt > 0.01) speed *= THREE.MathUtils.lerp(1, CFG.aimSpeedMul, this.aimAmt); // ADS slows you down
+    speed *= this.currentSpec.speedMul ?? 1; // knives make you faster (famous-shooter move)
     let fwd = (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0);
     let strafe = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
     if (this.touch) { fwd += this.touch.fwd; strafe += this.touch.strafe; }
@@ -290,11 +376,16 @@ export class LocalPlayer {
     }
     if (this.touch && this.touch.consumeReload()) this.tryReload();
     this.vel.y -= CFG.gravity * dt;
+    // BR parachute: freefall high up, gentle descent near the ground
+    if (this.parachute && !this.grounded) {
+      const cap = this.pos.y > 45 ? -26 : -8;
+      if (this.vel.y < cap) this.vel.y = cap;
+    }
 
     const wasAir = !this.grounded;
     const res = this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, this.bodyHeight);
     this.grounded = res.grounded;
-    if (wasAir && this.grounded) { this.audio.land(); this.onLand?.(); }
+    if (wasAir && this.grounded) { if (this.parachute) { this.parachute = false; this.audio.land(); } this.audio.land(); this.onLand?.(); }
 
     // footsteps
     if (this.grounded && (Math.abs(this.vel.x) + Math.abs(this.vel.z)) > 2) {
@@ -317,9 +408,24 @@ export class LocalPlayer {
   private tryShoot(now: number, fired: { fired: boolean }) {
     const spec = this.currentSpec;
     if (this.reloading || now - this.lastFire < spec.fireInterval * 1000) return;
-    if (this.mags[this.weaponIdx] > 0) {
+    // knives: silent melee swing — no ammo, short reach, always ready
+    if (spec.cat === 'knife') {
       this.lastFire = now;
-      this.mags[this.weaponIdx]--;
+      fired.fired = true;
+      this.vm.fire();
+      this.audio.knife();
+      const origin = this.eyePos;
+      const dirShot = new THREE.Vector3(
+        -Math.sin(this.yaw) * Math.cos(this.pitch),
+        Math.sin(this.pitch),
+        -Math.cos(this.yaw) * Math.cos(this.pitch)
+      );
+      this.onShoot?.(origin, dirShot);
+      return;
+    }
+    if (this.mags[this.slot] > 0) {
+      this.lastFire = now;
+      this.mags[this.slot]--;
       fired.fired = true;
       this.vm.fire();
       this.audio.shoot();
@@ -343,7 +449,7 @@ export class LocalPlayer {
         }
         this.onShoot?.(origin, dirShot);
       }
-      if (this.mags[this.weaponIdx] === 0) this.tryReload();
+      if (this.mags[this.slot] === 0) this.tryReload();
     } else {
       this.audio.empty();
       this.lastFire = now;
@@ -360,7 +466,7 @@ export class LocalPlayer {
 
   applyServerDamage(amt: number): boolean {
     if (!this.alive) return false;
-    this.hp -= amt;
+    this.hp -= this.absorb(amt);
     this.lastRegen = performance.now();
     if (this.hp <= 0) { this.hp = 0; this.alive = false; this.audio.death(); return true; }
     this.audio.hurt();

@@ -38,6 +38,29 @@ export class ViewModel {
       if (m.isMesh) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
     }
 
+    // ----- knives: blade + guard + grip (held low-right, quick swipe pose) -----
+    if (spec.cat === 'knife') {
+      const bladeMat = new THREE.MeshLambertMaterial({ color: spec.bladeColor ?? 0xb8c2c8, emissive: 0x1a2026 });
+      const gripMat = new THREE.MeshLambertMaterial({ color: 0x2c2620 });
+      const guardMat = new THREE.MeshLambertMaterial({ color: 0x54483a });
+      const bl = spec.bladeLen ?? 0.26, bw = spec.bladeW ?? 0.045;
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.012, bl), bladeMat);
+      blade.position.set(0, 0.01, -bl / 2 - 0.05);
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.5, 0.006, bl * 0.92), new THREE.MeshBasicMaterial({ color: 0xe8eef2 }));
+      edge.position.set(0, 0.022, -bl / 2 - 0.05);
+      const guard = new THREE.Mesh(new THREE.BoxGeometry(bw * 2.2, 0.02, 0.02), guardMat);
+      guard.position.set(0, 0.01, -0.045);
+      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.045, 0.13), gripMat);
+      grip.position.set(0, 0, 0.03);
+      grip.rotation.x = 0.18;
+      this.group.add(blade, edge, guard, grip);
+      this.group.position.set(0.26, -0.24, -0.5);
+      this.group.rotation.set(0.1, -0.5, 0.15);
+      this.muzzle.position.set(0, 0, -0.2);
+      this.group.add(this.muzzle);
+      return;
+    }
+
     const gunmetal = spec.wood ? 0x4a3f2c : 0x39372e;
     const bodyMat = new THREE.MeshLambertMaterial({ color: gunmetal });
     const woodMat = new THREE.MeshLambertMaterial({ color: 0x6b4f2e });
@@ -127,6 +150,18 @@ export class ViewModel {
   update(dt: number, moving: boolean, pitch: number, yaw: number, reloading: boolean, crouching = false, aimAmt = 0) {
     this.recoil = Math.max(0, this.recoil - dt * 6);
     if (moving) this.bobT += dt * (crouching ? 7 : 11);
+
+    // knife: swipe animation on attack (recoil drives it), rest pose stays low-right
+    if (this.spec.cat === 'knife') {
+      const swipe = this.recoil; // 0..1
+      this.group.position.set(
+        0.26 - swipe * 0.16,
+        -0.24 + Math.sin(this.bobT) * (moving ? 0.008 : 0.002) - swipe * 0.05,
+        -0.5 - swipe * 0.16
+      );
+      this.group.rotation.set(0.1 + swipe * 0.5, -0.5 + swipe * 0.4, 0.15 - swipe * 0.3);
+      return;
+    }
 
     // weapon sway follows look pitch (damped while aiming)
     const swayMul = 1 - aimAmt * 0.85;

@@ -10,7 +10,7 @@ const MARKERS = [0xe08a2e, 0xb0432a, 0x7d8f4e, 0xd6b25e, 0x5f7a8a, 0x9a5a6e, 0x6
 
 const HIT_MAT = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 
-export function makeAvatar(color: number, name: string, withNameplate = true): { group: THREE.Group; hitMeshes: THREE.Mesh[] } {
+export function makeAvatar(color: number, name: string, withNameplate = false): { group: THREE.Group; hitMeshes: THREE.Mesh[] } {
   const group = new THREE.Group();
   group.scale.setScalar(1.72); // soldier template is height 1 -> game height ~1.7
 

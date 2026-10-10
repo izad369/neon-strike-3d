@@ -51,6 +51,19 @@ export function injectStyles() {
 .ns-room { position: absolute; top: 14px; right: 24px; font-size: 13px; letter-spacing: 2px; color: #cdb27a;
   background: rgba(30,26,18,0.72); border: 1px solid #6b5d43; padding: 6px 12px; border-radius: 4px; }
 
+/* 3-slot loadout chips (primary / secondary / knife) — click or tap to switch */
+.ns-slots { position: absolute; top: 54px; left: 24px; display: flex; gap: 6px; pointer-events: auto; }
+.ns-slot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: 4px;
+  background: rgba(30,26,18,0.72); border: 1px solid #55492f; cursor: pointer; user-select: none; -webkit-user-select: none;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 1px; color: #a89873;
+  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s; }
+.ns-slot i { font-style: normal; font-size: 10px; width: 16px; height: 16px; line-height: 16px; text-align: center;
+  background: #3a3223; border: 1px solid #6b5d43; border-radius: 3px; color: #cdb27a; }
+.ns-slot.on { border-color: #d6b96a; color: #f0e6c8; box-shadow: 0 0 10px rgba(214,185,106,0.25); background: rgba(214,185,106,0.10); }
+.ns-slot.on i { background: #d6b96a; color: #1c1812; border-color: #d6b96a; }
+.ns-slot.empty { opacity: 0.45; }
+.ns-slot:hover { border-color: #b3a077; }
+
 .ns-feed { position: absolute; top: 64px; right: 24px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .ns-feed-item { background: rgba(28,24,16,0.85); border: 1px solid #6b5d43; border-left: 3px solid #cdb27a;
   padding: 4px 10px; font-size: 14px; font-weight: 600; border-radius: 3px; animation: ns-feed-in 0.18s ease-out; }
@@ -216,6 +229,9 @@ export function injectStyles() {
 .ns-root.ns-touch-mode .ns-crouch-ind { bottom: auto; top: 66px; }
 .ns-root.ns-touch-mode .ns-hint { display: none; }
 .ns-root.ns-touch-mode .ns-feed { top: 64px; right: 18px; max-width: 60vw; }
+.ns-root.ns-touch-mode .ns-tbtn.sb { top: 112px; }
+.ns-root.ns-touch-mode .ns-slot { padding: 5px 12px 5px 7px; font-size: 14px; }
+.ns-root.ns-touch-mode .ns-slot i { width: 19px; height: 19px; line-height: 19px; font-size: 11px; }
 @media (max-width: 760px) {
   .ns-menu-inner { padding: 22px 18px; }
   .ns-title { font-size: 36px; letter-spacing: 3px; }

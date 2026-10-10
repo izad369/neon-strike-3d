@@ -17,10 +17,10 @@ export class RemotePlayer {
   private lastShooting = false;
   muzzle = new THREE.Vector3();
 
-  constructor(id: string, name: string) {
+  constructor(id: string, name: string, withNameplate = false) {
     this.id = id;
     this.name = name;
-    const av = makeAvatar(playerColor(id), name);
+    const av = makeAvatar(playerColor(id), name, withNameplate);
     this.group = av.group;
     this.hitMeshes = av.hitMeshes;
     this.hitMeshes.forEach(m => { m.userData.remoteId = this.id; });

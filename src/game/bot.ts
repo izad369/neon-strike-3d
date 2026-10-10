@@ -30,6 +30,7 @@ export interface BotOptions {
   hpScale?: number;     // survival waves scale hp
   dmgScale?: number;    // survival waves scale damage
   noRespawn?: boolean;  // survival: waves spawn fresh bots, no auto respawn
+  nameplate?: boolean;  // allies only — enemy tags used to give away positions
 }
 
 export class Bot {
@@ -72,7 +73,7 @@ export class Bot {
     this.diff = DIFFICULTY[diff];
     this.maxHp = Math.round(CFG.botHp * (opts?.hpScale ?? 1));
     this.hp = this.maxHp;
-    const av = makeAvatar(color, name);
+    const av = makeAvatar(color, name, opts?.nameplate ?? false);
     this.group = av.group;
     this.hitMeshes = av.hitMeshes;
     this.hitMeshes.forEach(m => { m.userData.botId = this.id; });
@@ -245,17 +246,35 @@ export class Bot {
     if (body) body.position.y = moving ? Math.abs(Math.sin(now * 0.011)) * 0.05 : 0;
   }
 
+  /** can the bot currently SEE this position? (forward vision cone + LOS + range) */
+  private canSee(p: THREE.Vector3): boolean {
+    const d = this.pos.distanceTo(p);
+    const eye = new THREE.Vector3(this.pos.x, this.pos.y + 1.4, this.pos.z);
+    const tEye = new THREE.Vector3(p.x, p.y + 1.4, p.z);
+    if (!this.world.hasLOS(eye, tEye)) return false;
+    if (d < 3.5) return true; // close-quarters awareness (feel them right next to you)
+    // humans & bots have a real vision cone — no more 360° wallhack eyes
+    const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const to = new THREE.Vector3(p.x - this.pos.x, 0, p.z - this.pos.z).normalize();
+    return fwd.dot(to) > 0.22; // ~±77° cone in front
+  }
+
+  /** gunshot nearby: bots turn and investigate (they hear, not see) */
+  hear(from: THREE.Vector3) {
+    if (!this.alive || this.state === 'combat') return;
+    this.lastSeen = from.clone();
+    this.state = 'hunt';
+  }
+
   private currentTarget(targets: BotTarget[]): BotTarget | null {
     let best: BotTarget | null = null, bestD = Infinity;
-    const eye = new THREE.Vector3(this.pos.x, this.pos.y + 1.4, this.pos.z);
     for (const t of targets) {
       if (!t.alive) continue;
       if (t.id === this.id) continue; // never target self
       if (this.team !== -1 && t.team === this.team) continue; // team mode: enemies only
       const d = this.pos.distanceTo(t.pos);
       if (d > this.diff.vision) continue;
-      const tEye = new THREE.Vector3(t.pos.x, t.pos.y + 1.4, t.pos.z);
-      if (!this.world.hasLOS(eye, tEye)) continue;
+      if (!this.canSee(t.pos)) continue;
       if (d < bestD) { bestD = d; best = t; }
     }
     return best;

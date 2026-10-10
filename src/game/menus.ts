@@ -157,9 +157,9 @@ export class Menus {
       dm: 'Free-for-all. First to 25 kills or best score in 5:00 wins.',
       tdm: 'You + allied bots vs enemy squad. First team to 40 kills wins.',
       survival: 'Endless waves. Each wave is bigger and meaner. No respawns!',
-      gun: 'Every kill unlocks the next weapon. Finish all 7 guns to win.',
+      gun: 'Every kill unlocks the next weapon. Finish all 10 guns to win.',
       duel: '1v1 against one bot. First to win 3 rounds takes the duel.',
-      br: 'Jump from the plane, loot up, survive the shrinking zone. Last squad standing wins. Big map, 110+ items.',
+      br: 'Jump from the plane, loot 150+ items, climb the towers, survive the shrinking zone. Last squad standing wins.',
     };
     const ms = this.mapSeg();
     const applyMode = (m: GameMode) => {
@@ -207,7 +207,8 @@ export class Menus {
       <button class="ns-btn ns-join">Join Match</button>
       <button class="ns-btn small ns-back">Back</button>
       <div class="ns-status ns-online-status"></div>
-      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC &mdash; no game server needed. Share the room code with a friend. Battle Royale online is co-op: everyone vs bot squads.</div>
+      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC &mdash; no game server needed. Share the room code with a friend.
+      <b>No bots online</b> &mdash; only the players in your room. Battle Royale online is co-op: everyone survives the zone together.</div>
     </div>`);
     this.codeInput = p.querySelector('.ns-code')!;
     this.onlineStatusEl = p.querySelector('.ns-online-status')!;
@@ -323,27 +324,30 @@ export class Menus {
     const p = this.el(`<div>
       <div class="ns-panel-title">HOW TO PLAY</div>
       <div class="ns-help">
-        <b>Weapons (carry all 7):</b> <span class="k">1</span>..<span class="k">7</span> pick &bull;
-        <span class="k">Q</span> or mouse wheel cycles &bull; <b>WPN</b> button on mobile cycles.<br />
-        M9 pistol &bull; MP5 &bull; M870 shotgun (8 pellets) &bull; M4A1 &bull; MK14 DMR &bull; M249 LMG (80 rd) &bull; AWM sniper.<br /><br />
+        <b>Loadout (3 slots):</b> primary gun + backup pistol + knife. Press <span class="k">1</span>
+        <span class="k">2</span> <span class="k">3</span> to pick a slot &bull; <span class="k">Q</span> or mouse wheel cycles &bull;
+        or <b>click the slot chips</b> in the top-left corner (works on mobile too) &bull; <b>WPN</b> button cycles.<br />
+        <b>Holding a knife makes you faster</b> — each knife has its own speed and damage:
+        Tactical Knife &bull; Karambit &bull; Bowie &bull; Machete &bull; Butterfly.<br />
+        <b>Guns:</b> M9 &bull; Glock-18 &bull; Desert Eagle &bull; MP5 &bull; UMP-45 &bull; Vector &bull; M870 (8 pellets) &bull;
+        M1014 auto-shotgun &bull; M4A1 &bull; AK-47 &bull; SCAR-H &bull; MK14 &bull; SVD &bull; M249 (80 rd) &bull; RPK-74 &bull;
+        KAR98K &bull; AWM sniper (full scope).<br /><br />
         <b>Crouch:</b> <span class="k">C</span> toggles, <span class="k">CTRL</span> holds &bull; <b>CRCH</b> button on mobile.
-        Slower, but far more accurate and a smaller target.<br />
-        <b>Aim (ADS):</b> hold <b>RIGHT MOUSE</b> to aim down sights — zoomed in, tighter spread, steadier aim.
-        On mobile tap <b>AIM</b> to toggle. The AWM sniper gets a full scope view.<br />
+        <b>Aim (ADS):</b> hold <b>RIGHT MOUSE</b> (mobile: <b>AIM</b>) — scoped weapons hide the gun for a clean scope view.<br />
         <b>Fire-drag (mobile):</b> keep <b>FIRE</b> held and drag it to aim while shooting.<br /><br />
         <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40) &bull;
-        Survival (endless waves, no respawns) &bull; Gun Game (one kill per weapon, finish all 7) &bull;
-        <b>Duel</b> (1v1, first to 3 rounds) &bull; <b>Battle Royale</b> (jump from the plane, loot 100+ items,
-        survive the shrinking orange zone on the huge WARZONE map &mdash; last squad standing wins).<br /><br />
+        Survival (endless waves) &bull; Gun Game (10 kills, one per weapon) &bull;
+        <b>Duel</b> (1v1, first to 3 rounds) &bull; <b>Battle Royale</b> (plane drop, 150+ loot items,
+        shrinking zone, climbable watchtowers / stairs / roofs, walk over guns &amp; knives to swap your loadout).<br />
+        <b>Bots have real eyes now:</b> they only see what is in front of them — flank from behind!
+        They do hear gunfire nearby, though.<br />
+        <b>Online &amp; local multiplayer have NO bots</b> — only the humans in the room fight.
+        <br />
         <b>Maps:</b> DESERT OUTPOST &bull; URBAN BLOCKS &bull; DRY OASIS &bull; WARZONE (BR only, 170&times;170).
-        Two wooden watchtowers, tents, sandbags, barrels &amp; barriers are real cover — use them.
         <b>Headshots</b> deal double damage. Health regenerates after 5s out of combat.<br />
-        <b>Online:</b> create a match, share the room code, start fragging (P2P, host is authority).<br /><br />
-        <b>Mobile &amp; tablets:</b> touch controls turn on automatically and the game always renders landscape —
-        even if you hold the phone upright (a hint reminds you to rotate).<br />
-        Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots (hold = auto) &bull;
-        drag the FIRE button itself to aim while firing &bull; <b>AIM</b> toggles zoom &bull; <b>CRCH</b> crouches &bull; <b>WPN</b> swaps guns &bull;
-        <b>JUMP</b>/<b>RLD</b> &bull; <b>II</b> pauses &bull; <b>LIST</b> scoreboard.
+        <b>Mobile:</b> the game ALWAYS runs landscape — even if you hold the phone upright it renders
+        rotated automatically. Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots &bull;
+        <b>AIM</b> zoom &bull; <b>CRCH</b> crouch &bull; <b>WPN</b> swap weapon &bull; tap slot chips to switch.<br />
       </div>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
@@ -415,11 +419,13 @@ export class Menus {
     this.show('end');
   }
 
-  /** battle royale end screen (placement + kills) */
-  showBrEnd(won: boolean, kills: number, placement: number, myName: string) {
+  /** battle royale end screen (placement + kills). squads=0 → humans-only zone survival */
+  showBrEnd(won: boolean, kills: number, placement: number, myName: string, squads = 5) {
     this.endTitleEl.textContent = won ? 'WARZONE CHAMPION!' : 'ELIMINATED';
     this.endTitleEl.className = 'ns-end-title ' + (won ? 'win' : 'lose');
-    this.endSubEl.textContent = `#${placement} OF 5 SQUADS — ${myName}: ${kills} KILLS`;
+    this.endSubEl.textContent = squads > 0
+      ? `#${placement} OF ${squads} SQUADS — ${myName}: ${kills} KILLS`
+      : `ALL ZONES SURVIVED — ${myName}: ${kills} KILLS`;
     this.endBoardEl.innerHTML = '';
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row head"><span>Result</span><span></span><span></span></div>`));
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>Placement</span><span>#${placement}</span><span></span></div>`));

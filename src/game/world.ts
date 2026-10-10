@@ -247,10 +247,36 @@ export class World {
     roof.position.set(x, legH + 0.32 + railH + 1.5, z);
     roof.rotation.y = Math.PI / 4;
     this.mapRoot.add(roof);
-    // step crates to climb up
+    // step crates to climb up (1.1 → 2.2 → 3.3 → jump to the 4.2 platform)
     this.addPropBox(x + s / 2 + 1.1, 0, z, 1.6, 1.1, 1.6, woodDark);
     this.addPropBox(x + s / 2 + 1.1, 1.1, z, 1.6, 1.1, 1.6, woodDark);
     this.addPropBox(x + s / 2 - 0.7, 0, z, 1.4, 2.2, 1.4, woodDark);
+    this.addPropBox(x + s / 2 - 0.7, 2.2, z, 1.4, 1.1, 1.4, woodDark);
+  }
+
+  /** exterior staircase rising towards +side along an axis — makes roofs campable */
+  private addStairs(x: number, z: number, ry: number, width: number, steps: number, stepH: number, stepD: number, color: number) {
+    const cos = Math.cos(ry), sin = Math.sin(ry);
+    for (let i = 0; i < steps; i++) {
+      const h = (i + 1) * stepH;
+      const off = i * stepD;
+      const lx = 0, lz = off;
+      const wx = x + lx * cos - lz * sin, wz = z + lx * sin + lz * cos;
+      const ew = Math.abs(width * cos) + Math.abs(stepD * sin);
+      const ed = Math.abs(width * sin) + Math.abs(stepD * cos);
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(width, h, stepD),
+        new THREE.MeshLambertMaterial({ color })
+      );
+      mesh.position.set(wx, h / 2, wz);
+      mesh.rotation.y = ry;
+      this.mapRoot.add(mesh);
+      this.solids.push(mesh);
+      this.colliders.push({
+        min: new THREE.Vector3(wx - ew / 2, 0, wz - ed / 2),
+        max: new THREE.Vector3(wx + ew / 2, h, wz + ed / 2),
+      });
+    }
   }
 
   /** comms mast with crossbars + a small dish */
@@ -556,7 +582,7 @@ export class World {
     this.buildBase(CFG.brArena, 0xbfae7e, 0xa08f60, 0x8a7a54);
     const S = CFG.brArena, half = S / 2, H = 6;
 
-    // --- central town: 3x3 building grid with streets ---
+    // --- central town: 3x3 building grid with streets (two roofs get stairs = camp spots) ---
     for (let gx = -1; gx <= 1; gx++) {
       for (let gz = -1; gz <= 1; gz++) {
         if (gx === 0 && gz === 0) continue; // plaza stays open
@@ -564,8 +590,16 @@ export class World {
         const h = 5 + ((gx + 2) * (gz + 2)) % 4;
         this.addBox(bx, 0, bz, 13, h, 13, { color: 0xa3988a, glow: 0x6b6f74 });
         this.addPropBox(bx + (gx < 0 ? 8.5 : -8.5), 0, bz, 3.5, 2.2, 3.5, 0x8d8578);
+        // rooftop camping: exterior stairs on the two corner buildings (+x side)
+        if (gx === -1 && gz === -1) this.addStairs(bx + 7.4, bz - 6.5, 0, 2.2, Math.ceil(h / 0.55), 0.55, 0.85, 0x8d8272);
+        if (gx === 1 && gz === 1) this.addStairs(bx + 7.4, bz - 6.5, 0, 2.2, Math.ceil(h / 0.55), 0.55, 0.85, 0x8d8272);
       }
     }
+    // extra mid-field watchtowers = more high-ground camping
+    this.addWatchtower(-45, 16);
+    this.addWatchtower(45, -16);
+    this.addWatchtower(-16, -45);
+    this.addWatchtower(16, 45);
     // plaza cover
     this.addBox(0, 0, 0, 12, 1.8, 12, { color: 0xb0a895, glow: COLORS.yellow });
     this.addBarrier(0, 10, 0); this.addBarrier(0, -10, 0);
@@ -651,7 +685,9 @@ export class World {
     }
   }
 
-  /** axis-separated AABB movement with ground/step resolution. Mutates pos & vel. */
+  /** axis-separated AABB movement with ground/step resolution. Mutates pos & vel.
+   *  Includes a step-up assist: low ledges (stairs, crates ≤0.75m) are climbed
+   *  automatically, so roofs / towers / camping spots are actually reachable. */
   moveBody(pos: THREE.Vector3, vel: THREE.Vector3, dt: number, radius: number, height: number): { grounded: boolean } {
     let grounded = false;
     // Y first
@@ -666,26 +702,44 @@ export class World {
         }
       }
     }
-    // X
+    // X (with step-up)
     const oldX = pos.x;
     pos.x += vel.x * dt;
     for (const b of this.colliders) {
       if (this.overlaps(pos, radius, height, b)) {
-        pos.x = oldX; vel.x = 0; break;
+        if (!this.tryStep(pos, vel, radius, height, b)) { pos.x = oldX; vel.x = 0; }
+        else grounded = true;
+        break;
       }
     }
-    // Z
+    // Z (with step-up)
     const oldZ = pos.z;
     pos.z += vel.z * dt;
     for (const b of this.colliders) {
       if (this.overlaps(pos, radius, height, b)) {
-        pos.z = oldZ; vel.z = 0; break;
+        if (!this.tryStep(pos, vel, radius, height, b)) { pos.z = oldZ; vel.z = 0; }
+        else grounded = true;
+        break;
       }
     }
     const lim = this.arenaSize / 2 - radius - 0.4;
     pos.x = THREE.MathUtils.clamp(pos.x, -lim, lim);
     pos.z = THREE.MathUtils.clamp(pos.z, -lim, lim);
     return { grounded };
+  }
+
+  /** step-up assist: if the blocking box top is a low ledge, climb onto it instead */
+  private tryStep(pos: THREE.Vector3, vel: THREE.Vector3, radius: number, height: number, blocker: Box): boolean {
+    const stepH = blocker.max.y - pos.y;
+    if (stepH <= 0 || stepH > 0.75 || vel.y > 3) return false; // too high / actively jumping past it
+    const oldY = pos.y;
+    pos.y = blocker.max.y + 0.002;
+    for (const b of this.colliders) {
+      if (b === blocker) continue;
+      if (this.overlaps(pos, radius, height, b)) { pos.y = oldY; return false; } // no headroom
+    }
+    vel.y = Math.max(vel.y, 0);
+    return true;
   }
 
   private overlaps(pos: THREE.Vector3, r: number, h: number, b: Box): boolean {

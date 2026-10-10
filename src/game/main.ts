@@ -16,7 +16,7 @@ import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
 import { loadSoldier } from './assets';
 import { playerColor } from './avatar';
-import { WEAPONS, GUN_GAME_LADDER } from './weapons';
+import { WEAPONS, GUN_GAME_LADDER, LOOT_GUNS, LOOT_KNIVES } from './weapons';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -118,12 +118,15 @@ class Game {
     this.player.touch = this.touch;
     this.player.onWeaponSwitch = (spec, slot) => {
       this.hud.setWeaponName(spec.name);
-      this.hud.toast(`${spec.name}  [${slot + 1}/7]`);
+      this.hud.toast(`${spec.name}  [${slot + 1}/3]`);
     };
+    this.player.onSlotsChange = () => this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
+    this.hud.onSlotPick = (slot) => { if (this.state === 'playing' && this.player.alive) this.player.switchSlot(slot); };
     this.player.onCrouchChange = (c) => this.hud.setCrouchIndicator(c);
     this.player.onAimChange = (a) => this.touch.setAimActive(a);
 
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('orientationchange', this.onOrientationChange);
     document.addEventListener('pointerlockchange', this.onPointerLock);
     window.addEventListener('keydown', this.onKeydown);
     window.addEventListener('keyup', this.onKeyup);
@@ -135,7 +138,8 @@ class Game {
     this.rotMq.addEventListener?.('change', this.onOrientationChange);
     window.visualViewport?.addEventListener?.('resize', this.onResize);
 
-    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
+    this.hud.setWeaponName(this.player.currentSpec.name);
+    this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
     this.menus.show('main');
     this.renderLoop();
   }
@@ -215,8 +219,9 @@ class Game {
   }
 
   /**
-   * Layout: on touch devices in portrait the whole game is rendered rotated
-   * 90° (forced landscape) instead of pausing — plus a gentle rotate hint.
+   * Layout: on touch devices the game ALWAYS runs landscape — in portrait the
+   * whole game is rotated 90° with exact pixel dims (no vh/vw unit drift),
+   * so portrait mode simply does not exist any more.
    */
   private applyLayout() {
     const vv = window.visualViewport;
@@ -224,12 +229,25 @@ class Game {
     const vh = Math.round(vv?.height ?? window.innerHeight);
     const portrait = vh > vw;
     const force = this.touchActive && portrait;
-    this.root.classList.toggle('ns-forced-landscape', force);
+    if (force) {
+      // exact pixels: rotate + fill the physical screen (robust on every mobile browser)
+      this.root.classList.add('ns-forced-landscape');
+      this.root.style.width = vh + 'px';
+      this.root.style.height = vw + 'px';
+      this.root.style.transform = `rotate(90deg) translateY(-100%)`;
+    } else {
+      this.root.classList.remove('ns-forced-landscape');
+      this.root.style.width = '';
+      this.root.style.height = '';
+      this.root.style.transform = '';
+    }
     this.world.resize(force ? vh : vw, force ? vw : vh);
   }
 
   private onOrientationChange = () => {
     this.applyLayout();
+    // some WebViews fire resize before the rotation settles — re-apply once more
+    setTimeout(() => this.applyLayout(), 260);
     if (this.touchActive && this.state === 'playing') this.touch.showRotateHint(true);
   };
 
@@ -241,7 +259,8 @@ class Game {
     this.hud.showRespawn(false);
     this.hud.setZoneWarn(false);
     this.hud.setRoom(this.mode === 'host' ? `ROOM ${this.host?.code ?? ''}` : this.mode === 'client' ? `ROOM ${this.clientRoom}` : '');
-    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
+    this.hud.setWeaponName(this.player.currentSpec.name);
+    this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
     this.enterTouchUI();
     this.applyLayout();
     if (this.touchActive && this.isPortrait()) this.touch.showRotateHint(true);
@@ -266,8 +285,10 @@ class Game {
     this.enterMatch();
   }
 
-  /** mode-specific setup, shared by startOffline and restartMatch */
+  /** mode-specific setup, shared by startOffline and restartMatch.
+   *  Multiplayer (host) NEVER spawns bots — only the humans in the room play. */
   private initModeState(botCount: number) {
+    if (this.mode === 'host') botCount = 0;
     this.offlineBotCount = botCount;
     this.teams.clear();
     this.survWave = 0; this.survPending = 0; this.survIntermission = 0;
@@ -313,6 +334,8 @@ class Game {
       hpScale: opts?.hpScale,
       dmgScale: opts?.dmgScale,
       noRespawn: opts?.noRespawn,
+      // nameplates only on allies — enemy tags used to give away positions
+      nameplate: opts?.team === 0,
     });
     const id = bot.id; // FIX: key every map by the bot's real id — its hit meshes carry
     //                      userData.botId = bot.id, so a mismatch made enemies unkillable
@@ -359,13 +382,16 @@ class Game {
 
   // ================= battle royale =================
 
-  /** BR setup: squads, safe zone, loot, plane drop (offline + host; clients get state via net) */
+  /** BR setup: squads, safe zone, loot, plane drop (offline + host; clients get state via net).
+   *  Online (host) BR is humans-only — no bot squads, just the players vs the zone. */
   private setupBR() {
-    // squads: player + allies vs enemy squads
-    for (let i = 0; i < CFG.brAllies; i++) this.addBot(this.diff, { team: 0, idx: i, noRespawn: true });
-    for (let s = 0; s < CFG.brEnemySquads; s++) {
-      for (let m = 0; m < CFG.brSquadSize; m++) {
-        this.addBot(this.diff, { team: s + 1, idx: CFG.brAllies + s * CFG.brSquadSize + m, noRespawn: true });
+    // squads: player + allies vs enemy squads (offline only — multiplayer has no bots)
+    if (this.mode !== 'host') {
+      for (let i = 0; i < CFG.brAllies; i++) this.addBot(this.diff, { team: 0, idx: i, noRespawn: true });
+      for (let s = 0; s < CFG.brEnemySquads; s++) {
+        for (let m = 0; m < CFG.brSquadSize; m++) {
+          this.addBot(this.diff, { team: s + 1, idx: CFG.brAllies + s * CFG.brSquadSize + m, noRespawn: true });
+        }
       }
     }
     // initial safe zone near the middle of the map
@@ -386,7 +412,7 @@ class Game {
     this.player.parachute = true;
     this.bots.forEach(b => { const p = airDrop(); p.y = CFG.brPlaneY - Math.random() * 14; b.spawnAt(p); });
     this.spawnPlane();
-    this.hud.toast('BATTLE ROYALE — JUMP!', 2600);
+    this.hud.toast(this.mode === 'host' ? 'BATTLE ROYALE — LOOT & SURVIVE' : 'BATTLE ROYALE — JUMP!', 2600);
   }
 
   private buildZoneMeshes() {
@@ -504,6 +530,12 @@ class Game {
     if (this.gameMode !== 'br' || this.mode === 'client' || this.state !== 'playing') return;
     if (now < this.brCheckAt) return;
     this.brCheckAt = now + 700;
+    // humans-only BR (multiplayer): survive every zone phase to win
+    if (this.bots.size === 0) {
+      const z = this.brZone;
+      if (z && !z.shrinking && z.r <= CFG.brZoneMin + 0.5 && now >= z.hold) this.endMatch();
+      return;
+    }
     if (this.brAliveEnemies() === 0 || this.brAliveAllies() === 0) this.endMatch();
   }
 
@@ -557,7 +589,8 @@ class Game {
     if (kind === 'ammo') this.player.refillCurrent();
     else if (kind === 'med') this.player.heal(50);
     else if (kind === 'vest') this.player.armor = 100;
-    else this.player.giveWeapon(parseInt(kind[1], 10) - 1);
+    else if (kind[0] === 'k') this.player.giveKnife(LOOT_KNIVES[parseInt(kind.slice(1), 10) - 1]);
+    else this.player.giveWeapon(LOOT_GUNS[parseInt(kind.slice(1), 10) - 1]);
   }
 
   /** walk-over pickup (auto) — local player, any non-client mode or optimistic on client */
@@ -628,7 +661,7 @@ class Game {
     if (msg.t === 'hi') {
       const id = String(this.nextPeerNum++);
       this.connIds.set(conn, id);
-      const rp = new RemotePlayer(id, msg.name);
+      const rp = new RemotePlayer(id, msg.name, this.gameMode === 'br'); // ally plates in co-op BR only
       rp.hp = 100; rp.alive = true;
       this.world.scene.add(rp.group);
       this.remotes.set(id, rp);
@@ -783,7 +816,7 @@ class Game {
         if (sp.i === this.myId) { this.player.hp = sp.hp; this.player.alive = sp.hp > 0; continue; }
         let rp = this.remotes.get(sp.i);
         if (!rp) {
-          rp = new RemotePlayer(sp.i, sp.n);
+          rp = new RemotePlayer(sp.i, sp.n, this.gameMode === 'br');
           this.world.scene.add(rp.group);
           this.remotes.set(sp.i, rp);
           if (!this.scores.has(sp.i)) this.scores.set(sp.i, { k: 0, d: 0 });
@@ -864,6 +897,8 @@ class Game {
   }
 
   private onLocalShoot(origin: THREE.Vector3, dir: THREE.Vector3) {
+    // gunshot noise: nearby bots turn towards the shooter (they HEAR, no wallhack)
+    if (this.player.currentSpec.cat !== 'knife') this.alertBots(origin, 30);
     const hit = this.world.raycast(origin, dir, this.player.currentSpec.range, this.entityHitMeshes());
     const end = hit ? hit.point : origin.clone().add(dir.clone().multiplyScalar(this.player.currentSpec.range));
     this.fx.muzzleFlash(this.player.vm.muzzleWorld);
@@ -902,6 +937,17 @@ class Game {
     } else {
       this.fx.sparks(hit.point, 0xffe14d, 5);
     }
+  }
+
+  /** alert hostile bots (not teammates) within radius that a shot was fired at `from` */
+  private alertBots(from: THREE.Vector3, radius: number) {
+    const myTeam = this.teams.get(this.myId);
+    this.bots.forEach(b => {
+      if (!b.alive) return;
+      if ((this.gameMode === 'tdm' || this.gameMode === 'br') && b.team === myTeam) return;
+      if (b.pos.distanceTo(from) > radius) return;
+      b.hear(from);
+    });
   }
 
   private onBotShot(shot: BotShot) {
@@ -1136,7 +1182,8 @@ class Game {
     if (this.gameMode === 'br') {
       const won = this.mode !== 'client' && this.brAliveEnemies() === 0 && this.brAliveAllies() > 0;
       const k = this.scores.get(this.myId)?.k ?? 0;
-      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU');
+      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU',
+        this.bots.size > 0 ? CFG.brEnemySquads + 1 : 0);
       return;
     }
     if (this.mode === 'offline' && this.gameMode === 'duel') {
@@ -1231,17 +1278,20 @@ class Game {
 
   private onResize = () => this.applyLayout();
 
-  /** ADS view: fov zoom per weapon (aim blend smoothed in player) + sniper scope overlay */
+  /** ADS view: fov zoom per weapon (aim blend smoothed in player) + sniper scope overlay.
+   *  While fully scoped the weapon model hides — it used to clip into the scope picture. */
   private applyAimView(_dt: number) {
     const cam = this.world.camera;
-    const zoom = WEAPONS[this.player.weaponIndex].zoom ?? 1.25;
+    const spec = this.player.currentSpec;
+    const zoom = spec.zoom ?? 1.25;
     const target = CFG.baseFov / (1 + (zoom - 1) * this.player.aimAmount);
     if (Math.abs(cam.fov - target) > 0.01) {
       cam.fov = target;
       cam.updateProjectionMatrix();
     }
-    const scoped = !!WEAPONS[this.player.weaponIndex].scope && this.player.aimAmount > 0.82;
+    const scoped = !!spec.scope && this.player.aimAmount > 0.82;
     this.hud.setScope(scoped);
+    this.player.vm.setVisible(!scoped);
   }
   private onBeforeUnload = () => {
     if (this.mode === 'client') this.client?.send({ t: 'bye' });
@@ -1490,6 +1540,7 @@ class Game {
     window.removeEventListener('keydown', this.onKeydown);
     window.removeEventListener('keyup', this.onKeyup);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
+    window.removeEventListener('orientationchange', this.onOrientationChange);
     window.removeEventListener('ns-lobby-start', this.onLobbyStart as EventListener);
     this.rotMq?.removeEventListener?.('change', this.onOrientationChange);
     this.touch.destroy();
@@ -1504,13 +1555,17 @@ function botColor(id: string): number {
   return playerColor(id);
 }
 
-// ---- battle royale loot tables ----
+// ---- battle royale loot tables (BR carries far more items than any other mode) ----
 const LOOT_TABLE: [LootKind, number][] = [
-  ['w1', 7], ['w2', 13], ['w3', 11], ['w4', 15], ['w5', 9], ['w6', 8],
-  ['ammo', 17], ['med', 11], ['vest', 9],
+  ['w1', 5], ['w2', 8], ['w3', 7], ['w4', 9], ['w5', 7], ['w6', 5], ['w7', 4],
+  ['w8', 6], ['w9', 7], ['w10', 4], ['w11', 5], ['w12', 4],
+  ['k1', 3], ['k2', 2], ['k3', 2], ['k4', 2], ['k5', 2],
+  ['ammo', 12], ['med', 9], ['vest', 7],
 ];
 const LOOT_COLORS: Record<LootKind, number> = {
-  w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc98d4e, w4: 0x9fb86e, w5: 0xe0b35c, w6: 0x7d9a55,
+  w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc98d4e, w4: 0x9fb86e, w5: 0xc47a3a, w6: 0x7d9a55,
+  w7: 0xe0b35c, w8: 0xb0a06a, w9: 0x8a9a70, w10: 0x9a7a5a, w11: 0xc09060, w12: 0xd0b080,
+  k1: 0xb8c2c8, k2: 0x7fa8b8, k3: 0xc8b090, k4: 0xa8b0a0, k5: 0xd0c8e0,
   ammo: 0xd6b96a, med: 0xe07b6a, vest: 0x7f9fb5,
 };
 let lootGeo: THREE.BoxGeometry | null = null;

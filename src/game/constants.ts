@@ -43,7 +43,7 @@ export const CFG = {
   survivalPerWave: 1,   // bots added per wave
   survivalMaxAlive: 9,  // concurrent bots cap
   survivalIntermission: 5, // seconds between waves
-  gunGameTime: 360,     // 6 minutes
+  gunGameTime: 420,     // 7 minutes (10-kill ladder)
   // duel
   duelRounds: 3,        // first to 3 round wins
   duelRespawn: 2.2,     // seconds between duel rounds
@@ -57,7 +57,7 @@ export const CFG = {
   brZoneMin: 12,        // final zone radius
   brZonePhaseSec: 55,   // seconds per shrink phase
   brZoneHoldSec: 20,    // hold between phases
-  brLootCount: 110,     // loot spawns on the warzone map
+  brLootCount: 150,     // loot spawns on the warzone map (far more items than any other mode)
   brDmgBase: 5,         // zone dps at phase 0
 };
 
@@ -139,12 +139,16 @@ export type HostMsg =
   | { t: 'ev'; k: 'end'; board: [string, string, number, number][] } // [id, name, kills, deaths]
   | { t: 'ev'; k: 'start'; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId } };
 
-/** BR loot kinds: weapon slot indexes 1..6 plus supplies */
-export type LootKind = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'w6' | 'ammo' | 'med' | 'vest';
+/** BR loot kinds: weapon slots w1..w12 (see LOOT_GUNS in weapons.ts), knives k1..k5 (LOOT_KNIVES) plus supplies */
+export type LootKind = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'w6' | 'w7' | 'w8' | 'w9' | 'w10' | 'w11' | 'w12'
+  | 'k1' | 'k2' | 'k3' | 'k4' | 'k5' | 'ammo' | 'med' | 'vest';
 
 export const LOOT_LABEL: Record<LootKind, string> = {
   w1: 'M9 SIDEARM', w2: 'MP5 SMG', w3: 'M870 SHOTGUN', w4: 'M4A1 RIFLE',
-  w5: 'MK14 DMR', w6: 'M249 LMG', ammo: 'AMMO BOX', med: 'MEDKIT +50', vest: 'ARMOR VEST',
+  w5: 'AK-47', w6: 'M249 LMG', w7: 'AWM SNIPER', w8: 'SCAR-H',
+  w9: 'UMP-45', w10: 'SVD DRAGUNOV', w11: 'M1014 AUTO-SG', w12: 'DESERT EAGLE',
+  k1: 'TACTICAL KNIFE', k2: 'KARAMBIT', k3: 'BOWIE KNIFE', k4: 'MACHETE', k5: 'BUTTERFLY KNIFE',
+  ammo: 'AMMO BOX', med: 'MEDKIT +50', vest: 'ARMOR VEST',
 };
 
 export const NET_PREFIX = 'ns3d-match-';
