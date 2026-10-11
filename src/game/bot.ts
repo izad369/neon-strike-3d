@@ -25,12 +25,18 @@ type BotState = 'patrol' | 'combat' | 'hunt';
 
 let botCounter = 0;
 
+/** half-angle of the bot vision cone (radians). Bots are NOT omniscient — they
+ *  only notice what is roughly in front of them, with clear line of sight. */
+const BOT_FOV_HALF = 1.15; // ≈ 66° each side → ~132° cone
+const BOT_FOV_COS = Math.cos(BOT_FOV_HALF);
+const BOT_HEAR_RADIUS = CFG.brHearRadius;
+
 export interface BotOptions {
   team?: number;        // -1 default (no teams)
   hpScale?: number;     // survival waves scale hp
   dmgScale?: number;    // survival waves scale damage
   noRespawn?: boolean;  // survival: waves spawn fresh bots, no auto respawn
-  nameplate?: boolean;  // allies only — enemy tags used to give away positions
+  nameplate?: boolean;  // show the floating name tag (allies only — enemy tags leak positions)
 }
 
 export class Bot {
@@ -94,11 +100,19 @@ export class Bot {
   takeDamage(amt: number, now: number, attackerPos: THREE.Vector3): boolean {
     if (!this.alive) return false;
     this.hp -= amt;
-    // aggro towards attacker
+    // getting shot from behind still tells the bot where it came from
     this.lastSeen = attackerPos.clone();
     if (this.state === 'patrol') this.state = 'combat';
     if (this.hp <= 0) { this.hp = 0; this.die(now); return true; }
     return false;
+  }
+
+  /** a gunshot was heard nearby — investigate the source (called by main on any fire) */
+  hear(from: THREE.Vector3, now: number) {
+    if (!this.alive || this.state === 'combat') return;
+    if (this.pos.distanceTo(from) > BOT_HEAR_RADIUS) return;
+    this.lastSeen = from.clone();
+    if (this.state === 'patrol') { this.state = 'hunt'; this.nextThink = now + 400; }
   }
 
   private die(now: number) {
@@ -157,6 +171,14 @@ export class Bot {
           const dx = this.targetPoint.x - this.zone.cx, dz = this.targetPoint.z - this.zone.cz;
           const d = Math.hypot(dx, dz), maxR = Math.max(2, this.zone.r - 5);
           if (d > maxR) this.targetPoint.set(this.zone.cx + (dx / d) * maxR, this.pos.y, this.zone.cz + (dz / d) * maxR);
+        }
+        // elevated (roof / watchtower platform): hop the railing and keep walking
+        // until it drops — bots are on the ground floor 95% of the time anyway
+        if (this.pos.y > 1.2) {
+          this.vel.y = CFG.jumpVel;
+          // steer away from the highest nearby collider (walk off the edge)
+          const esc = new THREE.Vector3(Math.cos(Math.random() * Math.PI * 2), 0, Math.sin(Math.random() * Math.PI * 2));
+          this.targetPoint.set(this.pos.x + esc.x * 14, 0, this.pos.z + esc.z * 14);
         }
       }
       this.lastPos.copy(this.pos);
@@ -246,35 +268,25 @@ export class Bot {
     if (body) body.position.y = moving ? Math.abs(Math.sin(now * 0.011)) * 0.05 : 0;
   }
 
-  /** can the bot currently SEE this position? (forward vision cone + LOS + range) */
-  private canSee(p: THREE.Vector3): boolean {
-    const d = this.pos.distanceTo(p);
-    const eye = new THREE.Vector3(this.pos.x, this.pos.y + 1.4, this.pos.z);
-    const tEye = new THREE.Vector3(p.x, p.y + 1.4, p.z);
-    if (!this.world.hasLOS(eye, tEye)) return false;
-    if (d < 3.5) return true; // close-quarters awareness (feel them right next to you)
-    // humans & bots have a real vision cone — no more 360° wallhack eyes
-    const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    const to = new THREE.Vector3(p.x - this.pos.x, 0, p.z - this.pos.z).normalize();
-    return fwd.dot(to) > 0.22; // ~±77° cone in front
-  }
-
-  /** gunshot nearby: bots turn and investigate (they hear, not see) */
-  hear(from: THREE.Vector3) {
-    if (!this.alive || this.state === 'combat') return;
-    this.lastSeen = from.clone();
-    this.state = 'hunt';
-  }
-
   private currentTarget(targets: BotTarget[]): BotTarget | null {
     let best: BotTarget | null = null, bestD = Infinity;
+    const eye = new THREE.Vector3(this.pos.x, this.pos.y + 1.4, this.pos.z);
+    // what the bot is currently facing (vision cone axis)
+    const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     for (const t of targets) {
       if (!t.alive) continue;
       if (t.id === this.id) continue; // never target self
       if (this.team !== -1 && t.team === this.team) continue; // team mode: enemies only
+      if (t.pos.y > 3) continue; // still dropping from the plane (BR)
       const d = this.pos.distanceTo(t.pos);
       if (d > this.diff.vision) continue;
-      if (!this.canSee(t.pos)) continue;
+      // vision cone: target must be roughly in front (very close = peripheral hearing)
+      if (d > 2.5) {
+        const toT = new THREE.Vector3().subVectors(t.pos, this.pos).setY(0).normalize();
+        if (fwd.dot(toT) < BOT_FOV_COS) continue; // behind us — not seen
+      }
+      const tEye = new THREE.Vector3(t.pos.x, t.pos.y + 1.4, t.pos.z);
+      if (!this.world.hasLOS(eye, tEye)) continue;
       if (d < bestD) { bestD = d; best = t; }
     }
     return best;

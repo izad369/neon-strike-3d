@@ -2,12 +2,15 @@
 import { Difficulty, GameMode, MapId } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
+import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE, DEFAULT_PRIMARY, DEFAULT_BACKUP } from './weapons';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help';
 
+export interface Loadout { knife: number; primary: number; backup: number }
+
 export interface MenuCallbacks {
-  onStartOffline(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId): void;
-  onHost(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId): void;
+  onStartOffline(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId, loadout: Loadout): void;
+  onHost(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId, loadout: Loadout): void;
   onJoin(name: string, code: string): void;
   onResume(): void;
   onLeaveToMenu(): void;
@@ -99,11 +102,36 @@ export class Menus {
     return seg;
   }
 
-  private botsSeg(): { el: HTMLElement; get: () => number } {
+  /** loadout dropdowns: primary / backup / knife (3-slot system) — fresh set per panel */
+  private buildLoadoutSels(): [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement] {
+    const mk = (idxs: number[], def: number) => {
+      const sel = document.createElement('select');
+      sel.className = 'ns-input ns-loadout-sel';
+      sel.style.marginBottom = '6px';
+      idxs.forEach(i => {
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = WEAPONS[i].name;
+        if (i === def) o.selected = true;
+        sel.appendChild(o);
+      });
+      return sel;
+    };
+    return [mk(PRIMARY_INDEXES, DEFAULT_PRIMARY), mk(BACKUP_INDEXES, DEFAULT_BACKUP), mk(KNIFE_INDEXES, DEFAULT_KNIFE)];
+  }
+  private offLoadoutSels: [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement] | null = null;
+  private onHostLoadoutSels: [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement] | null = null;
+
+  private readLoadout(sels: [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement] | null): Loadout {
+    if (!sels) return { primary: DEFAULT_PRIMARY, backup: DEFAULT_BACKUP, knife: DEFAULT_KNIFE };
+    return { primary: parseInt(sels[0].value, 10), backup: parseInt(sels[1].value, 10), knife: parseInt(sels[2].value, 10) };
+  }
+
+  private botsSeg(options: number[], def: number): { el: HTMLElement; get: () => number } {
     const seg = this.el(`<div class="ns-seg">
-      <button data-n="3">3</button><button data-n="5" class="on">5</button><button data-n="8">8</button>
+      ${options.map(n => `<button data-n="${n}"${n === def ? ' class="on"' : ''}>${n}</button>`).join('')}
     </div>`);
-    let n = 5;
+    let n = def;
     seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
       seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
@@ -137,6 +165,8 @@ export class Menus {
       <div class="ns-mode-slot"></div>
       <div class="ns-field ns-map-field"><label>Map</label></div>
       <div class="ns-map-slot"></div>
+      <div class="ns-field ns-load-field"><label>Loadout — pick your 3 weapons</label></div>
+      <div class="ns-load-slot"></div>
       <div class="ns-field"><label>Bot difficulty</label></div>
       <div class="ns-diff-slot"></div>
       <div class="ns-field ns-bots-field"><label>Bots</label></div>
@@ -153,53 +183,81 @@ export class Menus {
     const botsSlot = p.querySelector('.ns-bots-slot') as HTMLElement;
     const mapField = p.querySelector('.ns-map-field') as HTMLElement;
     const mapSlot = p.querySelector('.ns-map-slot') as HTMLElement;
+    const loadField = p.querySelector('.ns-load-field') as HTMLElement;
+    const loadSlot = p.querySelector('.ns-load-slot') as HTMLElement;
     const DESCS: Record<GameMode, string> = {
       dm: 'Free-for-all. First to 25 kills or best score in 5:00 wins.',
-      tdm: 'You + allied bots vs enemy squad. First team to 40 kills wins.',
+      tdm: 'You + allied bots vs enemy squad. First team to 40 kills wins. Friendly fire is OFF.',
       survival: 'Endless waves. Each wave is bigger and meaner. No respawns!',
-      gun: 'Every kill unlocks the next weapon. Finish all 10 guns to win.',
-      duel: '1v1 against one bot. First to win 3 rounds takes the duel.',
-      br: 'Jump from the plane, loot 150+ items, climb the towers, survive the shrinking zone. Last squad standing wins.',
+      gun: 'Every kill unlocks the next of 13 guns. Finish the ladder to win.',
+      duel: '1v1 against one bot — always exactly two fighters. First to 3 rounds wins.',
+      br: 'Jump from the plane, loot guns & limited ammo off the ground, swap with SWAP (E). Survive the shrinking zone. Last squad standing wins.',
     };
     const ms = this.mapSeg();
+    const lo = this.offLoadoutSels = this.buildLoadoutSels();
     const applyMode = (m: GameMode) => {
       this.mode = m;
       modeDesc.textContent = DESCS[m];
-      const hideBots = m !== 'dm' && m !== 'tdm';
-      botsField.style.display = hideBots ? 'none' : '';
-      botsSlot.style.display = hideBots ? 'none' : '';
-      const hideMap = m === 'br'; // BR always plays the huge WARZONE map
+      // bots: only DM / TDM offer a bot count (Duel is ALWAYS 1v1)
+      const showBots = m === 'dm' || m === 'tdm';
+      botsField.style.display = showBots ? '' : 'none';
+      botsSlot.style.display = showBots ? '' : 'none';
+      if (showBots) {
+        const bs = this.botsSeg(m === 'tdm' ? [4, 6, 8] : [3, 5, 8], m === 'tdm' ? 6 : 5);
+        botsSlot.innerHTML = '';
+        botsSlot.appendChild(bs.el);
+        this.currentBots = bs;
+      }
+      // BR always plays the huge WARZONE map
+      const hideMap = m === 'br';
       mapField.style.display = hideMap ? 'none' : '';
       mapSlot.style.display = hideMap ? 'none' : '';
+      // loadout: BR = loot from the ground, Gun Game = ladder — both hide it
+      const hideLoad = m === 'br' || m === 'gun';
+      loadField.style.display = hideLoad ? 'none' : '';
+      loadSlot.style.display = hideLoad ? 'none' : '';
     };
     modeSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
       modeSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
       applyMode(b.dataset.m as GameMode);
     }));
-    applyMode('dm');
     const diffSlot = p.querySelector('.ns-diff-slot')!;
     diffSlot.replaceWith(this.diffSeg());
     p.querySelector('.ns-mode-slot')!.replaceWith(modeSeg);
     p.querySelector('.ns-map-slot')!.replaceWith(ms.el);
-    const bs = this.botsSeg();
-    p.querySelector('.ns-bots-slot')!.replaceWith(bs.el);
+    const loadWrap = this.el(`<div><div style="font-size:12px;letter-spacing:2px;color:#a08f6f;margin-bottom:4px">PRIMARY</div></div>`);
+    loadWrap.appendChild(lo[0]);
+    const bl = this.el(`<div style="font-size:12px;letter-spacing:2px;color:#a08f6f;margin:8px 0 4px">BACKUP</div>`);
+    loadWrap.appendChild(bl);
+    loadWrap.appendChild(lo[1]);
+    const kl = this.el(`<div style="font-size:12px;letter-spacing:2px;color:#a08f6f;margin:8px 0 4px">KNIFE</div>`);
+    loadWrap.appendChild(kl);
+    loadWrap.appendChild(lo[2]);
+    loadSlot.innerHTML = '';
+    loadSlot.appendChild(loadWrap);
+    applyMode('dm');
     p.querySelector('.ns-go')!.addEventListener('click', () => {
-      this.offlineBots = bs.get();
-      this.cb.onStartOffline(this.playerName(), this.offlineBots, this.diff, this.mode, this.mode === 'br' ? 'outpost' : ms.get());
+      const bots = this.mode === 'dm' || this.mode === 'tdm' ? (this.currentBots?.get() ?? 5) : 0;
+      this.offlineBots = bots;
+      this.cb.onStartOffline(this.playerName(), bots, this.diff, this.mode, this.mode === 'br' ? 'outpost' : ms.get(), this.readLoadout(this.offLoadoutSels));
     });
     p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
     this.addPanel('offline', p);
   }
 
+  private currentBots: { get: () => number } | null = null;
+
   private buildOnline() {
     const p = this.el(`<div>
       <div class="ns-panel-title">ONLINE MATCH</div>
-      <div class="ns-subtitle">Peer-to-peer with friends</div>
-      <div class="ns-field"><label>Host mode</label></div>
+      <div class="ns-subtitle">Peer-to-peer with friends — humans only, no bots</div>
+      <div class="ns-field"><label>Gameplay (host picks)</label></div>
       <div class="ns-hostmode-slot"></div>
       <div class="ns-field ns-hostmap-field"><label>Host map</label></div>
       <div class="ns-hostmap-slot"></div>
+      <div class="ns-field ns-hostload-field"><label>Host loadout (applies to everyone)</label></div>
+      <div class="ns-hostload-slot"></div>
       <button class="ns-btn primary ns-host">Create Match (get code)</button>
       <div class="ns-field" style="margin-top:22px"><label>Or join with room code</label>
         <div class="ns-row"><input class="ns-input ns-code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase; letter-spacing:6px; text-align:center" /></div>
@@ -207,18 +265,20 @@ export class Menus {
       <button class="ns-btn ns-join">Join Match</button>
       <button class="ns-btn small ns-back">Back</button>
       <div class="ns-status ns-online-status"></div>
-      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC &mdash; no game server needed. Share the room code with a friend.
-      <b>No bots online</b> &mdash; only the players in your room. Battle Royale online is co-op: everyone survives the zone together.</div>
+      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC — no game server needed. Share the room code with a friend. Multiplayer matches never spawn bots — only real players fight. Battle Royale online is everyone-for-themselves on the WARZONE map.</div>
     </div>`);
     this.codeInput = p.querySelector('.ns-code')!;
     this.onlineStatusEl = p.querySelector('.ns-online-status')!;
-    // host mode selection: DM / BR (+ map, hidden for BR)
+    // host gameplay selection: DM / TDM / BR (+ map, hidden for BR)
     const modeSeg = this.el(`<div class="ns-seg ns-hostmode-seg">
-      <button data-m="dm" class="on">DEATHMATCH</button><button data-m="br">BATTLE ROYALE</button>
+      <button data-m="dm" class="on">DEATHMATCH</button><button data-m="tdm">TEAM DEATHMATCH</button><button data-m="br">BATTLE ROYALE</button>
     </div>`);
     const mapField = p.querySelector('.ns-hostmap-field') as HTMLElement;
     const mapSlot = p.querySelector('.ns-hostmap-slot') as HTMLElement;
+    const loadField = p.querySelector('.ns-hostload-field') as HTMLElement;
+    const loadSlot = p.querySelector('.ns-hostload-slot') as HTMLElement;
     const ms = this.mapSeg();
+    const hlo = this.onHostLoadoutSels = this.buildLoadoutSels();
     modeSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
       modeSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
@@ -226,11 +286,20 @@ export class Menus {
       const hideMap = this.onlineMode === 'br';
       mapField.style.display = hideMap ? 'none' : '';
       mapSlot.style.display = hideMap ? 'none' : '';
+      const hideLoad = this.onlineMode === 'br';
+      loadField.style.display = hideLoad ? 'none' : '';
+      loadSlot.style.display = hideLoad ? 'none' : '';
     }));
     p.querySelector('.ns-hostmode-slot')!.replaceWith(modeSeg);
     p.querySelector('.ns-hostmap-slot')!.replaceWith(ms.el);
+    const hl = this.el('<div></div>');
+    hl.appendChild(hlo[0]);
+    hl.appendChild(hlo[1]);
+    hl.appendChild(hlo[2]);
+    loadSlot.innerHTML = '';
+    loadSlot.appendChild(hl);
     p.querySelector('.ns-host')!.addEventListener('click', () =>
-      this.cb.onHost(this.playerName(), 4, this.diff, this.onlineMode, this.onlineMode === 'br' ? 'outpost' : ms.get()));
+      this.cb.onHost(this.playerName(), 0, this.diff, this.onlineMode, this.onlineMode === 'br' ? 'outpost' : ms.get(), this.readLoadout(this.onHostLoadoutSels)));
     p.querySelector('.ns-join')!.addEventListener('click', () => {
       const c = this.codeInput.value.trim();
       if (c.length < 4) { this.setOnlineStatus('Enter the 5-letter room code.', true); return; }
@@ -324,30 +393,29 @@ export class Menus {
     const p = this.el(`<div>
       <div class="ns-panel-title">HOW TO PLAY</div>
       <div class="ns-help">
-        <b>Loadout (3 slots):</b> primary gun + backup pistol + knife. Press <span class="k">1</span>
-        <span class="k">2</span> <span class="k">3</span> to pick a slot &bull; <span class="k">Q</span> or mouse wheel cycles &bull;
-        or <b>click the slot chips</b> in the top-left corner (works on mobile too) &bull; <b>WPN</b> button cycles.<br />
-        <b>Holding a knife makes you faster</b> — each knife has its own speed and damage:
-        Tactical Knife &bull; Karambit &bull; Bowie &bull; Machete &bull; Butterfly.<br />
-        <b>Guns:</b> M9 &bull; Glock-18 &bull; Desert Eagle &bull; MP5 &bull; UMP-45 &bull; Vector &bull; M870 (8 pellets) &bull;
-        M1014 auto-shotgun &bull; M4A1 &bull; AK-47 &bull; SCAR-H &bull; MK14 &bull; SVD &bull; M249 (80 rd) &bull; RPK-74 &bull;
-        KAR98K &bull; AWM sniper (full scope).<br /><br />
+        <b>3-slot loadout:</b> you carry a <b>knife + primary + backup</b>. Pick them before the match;
+        <span class="k">1</span><span class="k">2</span><span class="k">3</span> or the weapon bar (top-right) swaps instantly. Knives make you <b>faster</b>.<br />
+        <b>13 guns:</b> M9 &bull; Deagle &bull; MP5 &bull; UMP-45 &bull; Vector &bull; M870 (8 pellets) &bull; M4A1 &bull; AK-47 &bull; FAMAS &bull; MK14 DMR &bull; M249 (80 rd) &bull; Kar98K &bull; AWM sniper.<br />
+        <b>4 melee:</b> Combat Knife &bull; Karambit &bull; Machete &bull; Katana.<br /><br />
         <b>Crouch:</b> <span class="k">C</span> toggles, <span class="k">CTRL</span> holds &bull; <b>CRCH</b> button on mobile.
-        <b>Aim (ADS):</b> hold <b>RIGHT MOUSE</b> (mobile: <b>AIM</b>) — scoped weapons hide the gun for a clean scope view.<br />
+        Slower, but far more accurate and a smaller target.<br />
+        <b>Aim (ADS):</b> hold <b>RIGHT MOUSE</b> to aim down sights — zoomed in, tighter spread, steadier aim.
+        On mobile tap <b>AIM</b> to toggle. The AWM gets a full scope view (gun hides away).<br />
         <b>Fire-drag (mobile):</b> keep <b>FIRE</b> held and drag it to aim while shooting.<br /><br />
-        <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40) &bull;
-        Survival (endless waves) &bull; Gun Game (10 kills, one per weapon) &bull;
-        <b>Duel</b> (1v1, first to 3 rounds) &bull; <b>Battle Royale</b> (plane drop, 150+ loot items,
-        shrinking zone, climbable watchtowers / stairs / roofs, walk over guns &amp; knives to swap your loadout).<br />
-        <b>Bots have real eyes now:</b> they only see what is in front of them — flank from behind!
-        They do hear gunfire nearby, though.<br />
-        <b>Online &amp; local multiplayer have NO bots</b> — only the humans in the room fight.
-        <br />
+        <b>Modes:</b> Deathmatch (first to 25) &bull; Team Deathmatch (first team to 40, friendly fire off) &bull;
+        Survival (endless waves, no respawns) &bull; Gun Game (13-gun ladder) &bull;
+        <b>Duel</b> (strict 1v1, first to 3 rounds) &bull; <b>Battle Royale</b> (jump from the plane, loot guns &amp; limited ammo,
+        swap with <b>SWAP / E</b>, survive the shrinking orange zone &mdash; last squad standing wins).<br /><br />
         <b>Maps:</b> DESERT OUTPOST &bull; URBAN BLOCKS &bull; DRY OASIS &bull; WARZONE (BR only, 170&times;170).
-        <b>Headshots</b> deal double damage. Health regenerates after 5s out of combat.<br />
-        <b>Mobile:</b> the game ALWAYS runs landscape — even if you hold the phone upright it renders
-        rotated automatically. Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots &bull;
-        <b>AIM</b> zoom &bull; <b>CRCH</b> crouch &bull; <b>WPN</b> swap weapon &bull; tap slot chips to switch.<br />
+        Watchtower platforms &amp; WARZONE rooftops are reachable — climb the crates and camp.
+        <b>Headshots</b> deal bonus damage. Health regenerates after 5s out of combat.<br />
+        <b>Online:</b> DM / TDM / BR with real players only (P2P, host is authority — the host's loadout applies).<br /><br />
+        <b>Mobile &amp; tablets:</b> touch controls turn on automatically and the game ALWAYS renders landscape —
+        holding the phone upright just rotates the picture (controls follow your grip).
+        Left stick moves &bull; drag right side to aim &bull; <b>FIRE</b> shoots (hold = auto) &bull;
+        drag the FIRE button itself to aim while firing &bull; <b>AIM</b> toggles zoom &bull; <b>CRCH</b> crouches &bull;
+        weapon bar (top-right) swaps guns &bull; <b>SWAP</b> picks up BR ground weapons &bull;
+        <b>JUMP</b>/<b>RLD</b> &bull; <b>II</b> pauses &bull; <b>LIST</b> scoreboard.
       </div>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
@@ -419,13 +487,11 @@ export class Menus {
     this.show('end');
   }
 
-  /** battle royale end screen (placement + kills). squads=0 → humans-only zone survival */
-  showBrEnd(won: boolean, kills: number, placement: number, myName: string, squads = 5) {
+  /** battle royale end screen (placement + kills) */
+  showBrEnd(won: boolean, kills: number, placement: number, myName: string) {
     this.endTitleEl.textContent = won ? 'WARZONE CHAMPION!' : 'ELIMINATED';
     this.endTitleEl.className = 'ns-end-title ' + (won ? 'win' : 'lose');
-    this.endSubEl.textContent = squads > 0
-      ? `#${placement} OF ${squads} SQUADS — ${myName}: ${kills} KILLS`
-      : `ALL ZONES SURVIVED — ${myName}: ${kills} KILLS`;
+    this.endSubEl.textContent = `#${placement} OF 5 SQUADS — ${myName}: ${kills} KILLS`;
     this.endBoardEl.innerHTML = '';
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row head"><span>Result</span><span></span><span></span></div>`));
     this.endBoardEl.appendChild(this.el(`<div class="ns-sb-row me"><span>Placement</span><span>#${placement}</span><span></span></div>`));

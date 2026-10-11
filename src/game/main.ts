@@ -16,7 +16,8 @@ import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
 import { loadSoldier } from './assets';
 import { playerColor } from './avatar';
-import { WEAPONS, GUN_GAME_LADDER, LOOT_GUNS, LOOT_KNIVES } from './weapons';
+import { WEAPONS, GUN_GAME_LADDER, BR_LOOT_GUNS } from './weapons';
+import { Loadout } from './menus';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -89,6 +90,11 @@ class Game {
   private respawnDeadline = 0;
   private hostRespawns = new Map<string, number>();
   private prevShootFlags = new Map<string, boolean>();
+  private pendingLoadout: Loadout = { knife: 0, primary: 10, backup: 4 };
+  private hostLoadout: [number, number, number] = [0, 10, 4];
+  private nextTeamFlip = false;
+  private brSwapTarget: number | null = null;
+  private lastSlotsSig = '';
 
   constructor(private root: HTMLElement) {
     // touch detection first — it tunes the renderer for mobile GPUs
@@ -103,8 +109,8 @@ class Game {
       onScoreboard: (show) => this.showScoreboard(show),
     });
     this.menus = new Menus(root, {
-      onStartOffline: (name, bots, diff, mode, map) => this.startOffline(name, bots, diff, mode, map),
-      onHost: (name, bots, diff, mode, map) => this.startHost(name, bots, diff, mode, map),
+      onStartOffline: (name, bots, diff, mode, map, lo) => this.startOffline(name, bots, diff, mode, map, lo),
+      onHost: (name, bots, diff, mode, map, lo) => this.startHost(name, bots, diff, mode, map, lo),
       onJoin: (name, code) => this.joinMatch(name, code),
       onResume: () => this.resume(),
       onLeaveToMenu: () => this.leaveToMenu(),
@@ -116,17 +122,14 @@ class Game {
     this.player = new LocalPlayer(this.world, this.world.camera, this.audio, root);
     this.player.onShoot = (o, d) => this.onLocalShoot(o, d);
     this.player.touch = this.touch;
-    this.player.onWeaponSwitch = (spec, slot) => {
+    this.player.onWeaponSwitch = (spec, _slot, slotIdx) => {
       this.hud.setWeaponName(spec.name);
-      this.hud.toast(`${spec.name}  [${slot + 1}/3]`);
+      this.hud.toast(`${spec.name}  [${slotIdx + 1}/3]`);
     };
-    this.player.onSlotsChange = () => this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
-    this.hud.onSlotPick = (slot) => { if (this.state === 'playing' && this.player.alive) this.player.switchSlot(slot); };
     this.player.onCrouchChange = (c) => this.hud.setCrouchIndicator(c);
     this.player.onAimChange = (a) => this.touch.setAimActive(a);
 
     window.addEventListener('resize', this.onResize);
-    window.addEventListener('orientationchange', this.onOrientationChange);
     document.addEventListener('pointerlockchange', this.onPointerLock);
     window.addEventListener('keydown', this.onKeydown);
     window.addEventListener('keyup', this.onKeyup);
@@ -137,9 +140,12 @@ class Game {
     this.rotMq = window.matchMedia('(orientation: portrait)');
     this.rotMq.addEventListener?.('change', this.onOrientationChange);
     window.visualViewport?.addEventListener?.('resize', this.onResize);
+    // physical tilt hint: which way the phone is held (fixes inverted controls
+    // when the picture is force-rotated) — best effort, iOS may not report it
+    window.addEventListener('deviceorientation', this.onDeviceTilt as EventListener);
 
-    this.hud.setWeaponName(this.player.currentSpec.name);
-    this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
+    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
+    this.applyLayout(); // initial forced-landscape / rotation pass
     this.menus.show('main');
     this.renderLoop();
   }
@@ -215,13 +221,14 @@ class Game {
     if (active === this.touchActive) { if (this.state === 'playing' && !this.paused) this.touch.setEnabled(active); return; }
     this.touchActive = active;
     this.root.classList.toggle('ns-touch-mode', active);
+    this.applyLayout(); // re-evaluate forced landscape for the new touch state
     if (this.state === 'playing' && !this.paused) this.touch.setEnabled(active);
   }
 
   /**
-   * Layout: on touch devices the game ALWAYS runs landscape — in portrait the
-   * whole game is rotated 90° with exact pixel dims (no vh/vw unit drift),
-   * so portrait mode simply does not exist any more.
+   * Layout: on touch devices held portrait the whole game is rendered rotated
+   * 90° (forced landscape, portrait is GONE). Rotation direction follows how
+   * the phone is physically held so controls never feel inverted.
    */
   private applyLayout() {
     const vv = window.visualViewport;
@@ -229,27 +236,28 @@ class Game {
     const vh = Math.round(vv?.height ?? window.innerHeight);
     const portrait = vh > vw;
     const force = this.touchActive && portrait;
+    let flip = false;
     if (force) {
-      // exact pixels: rotate + fill the physical screen (robust on every mobile browser)
-      this.root.classList.add('ns-forced-landscape');
-      this.root.style.width = vh + 'px';
-      this.root.style.height = vw + 'px';
-      this.root.style.transform = `rotate(90deg) translateY(-100%)`;
-    } else {
-      this.root.classList.remove('ns-forced-landscape');
-      this.root.style.width = '';
-      this.root.style.height = '';
-      this.root.style.transform = '';
+      const ang = (typeof screen !== 'undefined' && screen.orientation) ? screen.orientation.angle : 0;
+      if (ang === 180) flip = true;              // upside-down portrait
+      else if (ang === 0) flip = this.tiltGamma > 45; // clockwise hold → mirrored rotate
+      // ang 90/270 would already be landscape (no forcing)
     }
+    this.root.classList.toggle('ns-forced-landscape', force && !flip);
+    this.root.classList.toggle('ns-forced-landscape-flip', force && flip);
+    this.touch.setForcedRotation(force ? (flip ? -90 : 90) : 0);
     this.world.resize(force ? vh : vw, force ? vw : vh);
   }
 
   private onOrientationChange = () => {
     this.applyLayout();
-    // some WebViews fire resize before the rotation settles — re-apply once more
-    setTimeout(() => this.applyLayout(), 260);
-    if (this.touchActive && this.state === 'playing') this.touch.showRotateHint(true);
   };
+
+  /** gamma > 45° means the phone's right edge points DOWN (clockwise hold) */
+  private onDeviceTilt = (e: DeviceOrientationEvent) => {
+    if (e.gamma !== null && Math.abs(e.gamma) > 40) this.tiltGamma = e.gamma;
+  };
+  private tiltGamma = 0;
 
   private enterMatch() {
     this.state = 'playing';
@@ -259,18 +267,12 @@ class Game {
     this.hud.showRespawn(false);
     this.hud.setZoneWarn(false);
     this.hud.setRoom(this.mode === 'host' ? `ROOM ${this.host?.code ?? ''}` : this.mode === 'client' ? `ROOM ${this.clientRoom}` : '');
-    this.hud.setWeaponName(this.player.currentSpec.name);
-    this.hud.setSlots(this.player.slotNames, this.player.activeSlot);
+    this.hud.setWeaponName(WEAPONS[this.player.weaponIndex].name);
     this.enterTouchUI();
     this.applyLayout();
-    if (this.touchActive && this.isPortrait()) this.touch.showRotateHint(true);
   }
 
-  private isPortrait(): boolean {
-    return (window.visualViewport?.height ?? window.innerHeight) > (window.visualViewport?.width ?? window.innerWidth);
-  }
-
-  private startOffline(name: string, botCount: number, diff: Difficulty, mode: GameMode, map: MapId) {
+  private startOffline(name: string, botCount: number, diff: Difficulty, mode: GameMode, map: MapId, loadout: Loadout) {
     this.audio.resume();
     this.cleanupNet();
     this.resetWorldEntities();
@@ -278,26 +280,31 @@ class Game {
     this.myId = '1';
     this.diff = diff;
     this.gameMode = mode;
+    this.pendingLoadout = loadout;
+    this.player.limitedAmmo = false;
+    if (mode !== 'br' && mode !== 'gun') {
+      this.player.setLoadout(loadout.knife, loadout.primary, loadout.backup);
+    }
     this.world.setMap(mode === 'br' ? 'warzone' : map);
     this.setupLocal(name);
-    this.initModeState(botCount);
+    this.initModeState(botCount, true);
     this.hud.setKD(0, 0);
     this.enterMatch();
   }
 
   /** mode-specific setup, shared by startOffline and restartMatch.
-   *  Multiplayer (host) NEVER spawns bots — only the humans in the room play. */
-  private initModeState(botCount: number) {
-    if (this.mode === 'host') botCount = 0;
+   *  spawnBots=false → humans only (online/local multiplayer: NO bots ever). */
+  private initModeState(botCount: number, spawnBots: boolean) {
     this.offlineBotCount = botCount;
     this.teams.clear();
     this.survWave = 0; this.survPending = 0; this.survIntermission = 0;
     this.survElapsed = 0; this.survEnding = false; this.lastWaveAlive = 0;
+    this.nextTeamFlip = false;
     if (this.gameMode === 'tdm') {
       this.teams.set(this.myId, 0);
       // half of the bots are allies, the rest enemies
       const allies = Math.floor(botCount / 2);
-      for (let i = 0; i < botCount; i++) this.addBot(this.diff, { team: i < allies ? 0 : 1, idx: i });
+      if (spawnBots) for (let i = 0; i < botCount; i++) this.addBot(this.diff, { team: i < allies ? 0 : 1, idx: i, nameplate: i < allies });
       this.matchTime = CFG.matchTime;
     } else if (this.gameMode === 'survival') {
       this.matchTime = 9999 * 60; // counts up; HUD shows wave info
@@ -306,23 +313,25 @@ class Game {
     } else if (this.gameMode === 'gun') {
       this.matchTime = CFG.gunGameTime;
       for (let i = 0; i < 5; i++) this.addBot(this.diff, { idx: i });
-      this.player.switchWeapon(GUN_GAME_LADDER[0], true);
+      this.player.setWeaponDirect(GUN_GAME_LADDER[0]);
     } else if (this.gameMode === 'duel') {
       this.matchTime = 9999 * 60;
       this.duelScore = [0, 0]; this.duelRound = 1; this.duelWaitUntil = 0;
-      const bot = this.addBot(this.diff, { noRespawn: true });
-      bot.spawnAt(this.world.pickSpawn([this.player.pos]));
+      if (spawnBots) {
+        const bot = this.addBot(this.diff, { noRespawn: true });
+        bot.spawnAt(this.world.pickSpawn([this.player.pos]));
+      }
       this.hud.toast('DUEL — FIRST TO 3 ROUNDS', 2600);
     } else if (this.gameMode === 'br') {
       this.matchTime = 9999 * 60;
-      this.setupBR();
+      this.setupBR(spawnBots);
     } else {
       this.matchTime = CFG.matchTime;
-      for (let i = 0; i < botCount; i++) this.addBot(this.diff, { idx: i });
+      if (spawnBots) for (let i = 0; i < botCount; i++) this.addBot(this.diff, { idx: i });
     }
   }
 
-  private addBot(diff: Difficulty, opts?: { team?: number; idx?: number; hpScale?: number; dmgScale?: number; noRespawn?: boolean }) {
+  private addBot(diff: Difficulty, opts?: { team?: number; idx?: number; hpScale?: number; dmgScale?: number; noRespawn?: boolean; nameplate?: boolean }) {
     const idx = opts?.idx ?? this.bots.size;
     const name = this.menus.botNameFor(idx);
     // TDM/BR: team colors (olive allies / red enemies). DM: per-bot marker palette.
@@ -334,8 +343,7 @@ class Game {
       hpScale: opts?.hpScale,
       dmgScale: opts?.dmgScale,
       noRespawn: opts?.noRespawn,
-      // nameplates only on allies — enemy tags used to give away positions
-      nameplate: opts?.team === 0,
+      nameplate: opts?.nameplate, // allies only — enemy name tags reveal positions
     });
     const id = bot.id; // FIX: key every map by the bot's real id — its hit meshes carry
     //                      userData.botId = bot.id, so a mismatch made enemies unkillable
@@ -382,17 +390,18 @@ class Game {
 
   // ================= battle royale =================
 
-  /** BR setup: squads, safe zone, loot, plane drop (offline + host; clients get state via net).
-   *  Online (host) BR is humans-only — no bot squads, just the players vs the zone. */
-  private setupBR() {
-    // squads: player + allies vs enemy squads (offline only — multiplayer has no bots)
-    if (this.mode !== 'host') {
-      for (let i = 0; i < CFG.brAllies; i++) this.addBot(this.diff, { team: 0, idx: i, noRespawn: true });
+  /** BR setup: squads (offline) / humans-only FFA (online), safe zone, loot, plane drop */
+  private setupBR(spawnBots: boolean) {
+    if (spawnBots) {
+      // squads: player + allies vs enemy squads
+      for (let i = 0; i < CFG.brAllies; i++) this.addBot(this.diff, { team: 0, idx: i, noRespawn: true, nameplate: true });
       for (let s = 0; s < CFG.brEnemySquads; s++) {
         for (let m = 0; m < CFG.brSquadSize; m++) {
           this.addBot(this.diff, { team: s + 1, idx: CFG.brAllies + s * CFG.brSquadSize + m, noRespawn: true });
         }
       }
+    } else {
+      this.teams.set(this.myId, 0); // online FFA: every human is their own squad
     }
     // initial safe zone near the middle of the map
     const a = Math.random() * Math.PI * 2, d0 = Math.random() * 16;
@@ -412,7 +421,7 @@ class Game {
     this.player.parachute = true;
     this.bots.forEach(b => { const p = airDrop(); p.y = CFG.brPlaneY - Math.random() * 14; b.spawnAt(p); });
     this.spawnPlane();
-    this.hud.toast(this.mode === 'host' ? 'BATTLE ROYALE — LOOT & SURVIVE' : 'BATTLE ROYALE — JUMP!', 2600);
+    this.hud.toast('BATTLE ROYALE — JUMP!', 2600);
   }
 
   private buildZoneMeshes() {
@@ -509,20 +518,26 @@ class Game {
   private brAliveEnemies(): number {
     let n = 0;
     this.bots.forEach(b => { if (b.alive && b.team > 0) n++; });
+    // humans-only BR (online): every other player is an enemy squad of one
+    const myTeam = this.teams.get(this.myId) ?? 0;
+    this.remotes.forEach((r, id) => { if (r.alive && (this.teams.get(id) ?? 1) !== myTeam) n++; });
     return n;
   }
 
   private brAliveAllies(): number {
     let n = this.player.alive ? 1 : 0;
-    this.bots.forEach(b => { if (b.alive && b.team === 0) n++; });
-    if (this.mode === 'host') this.remotes.forEach(r => { if (r.alive) n++; });
+    const myTeam = this.teams.get(this.myId) ?? 0;
+    this.bots.forEach(b => { if (b.alive && b.team === myTeam) n++; });
+    if (this.mode === 'host') this.remotes.forEach((r, id) => { if (r.alive && this.teams.get(id) === myTeam) n++; });
     return n;
   }
 
   /** squads still in the game when the player's squad falls (placement) */
   private brPlacement(): number {
+    const myTeam = this.teams.get(this.myId) ?? 0;
     const teams = new Set<number>();
-    this.bots.forEach(b => { if (b.alive && b.team > 0) teams.add(b.team); });
+    this.bots.forEach(b => { if (b.alive && b.team !== myTeam) teams.add(b.team); });
+    this.remotes.forEach((r, id) => { if (r.alive && (this.teams.get(id) ?? 1) !== myTeam) teams.add(this.teams.get(id) ?? 1); });
     return teams.size + 1;
   }
 
@@ -530,12 +545,6 @@ class Game {
     if (this.gameMode !== 'br' || this.mode === 'client' || this.state !== 'playing') return;
     if (now < this.brCheckAt) return;
     this.brCheckAt = now + 700;
-    // humans-only BR (multiplayer): survive every zone phase to win
-    if (this.bots.size === 0) {
-      const z = this.brZone;
-      if (z && !z.shrinking && z.r <= CFG.brZoneMin + 0.5 && now >= z.hold) this.endMatch();
-      return;
-    }
     if (this.brAliveEnemies() === 0 || this.brAliveAllies() === 0) this.endMatch();
   }
 
@@ -589,42 +598,113 @@ class Game {
     if (kind === 'ammo') this.player.refillCurrent();
     else if (kind === 'med') this.player.heal(50);
     else if (kind === 'vest') this.player.armor = 100;
-    else if (kind[0] === 'k') this.player.giveKnife(LOOT_KNIVES[parseInt(kind.slice(1), 10) - 1]);
-    else this.player.giveWeapon(LOOT_GUNS[parseInt(kind.slice(1), 10) - 1]);
+    else this.player.giveWeapon(BR_LOOT_GUNS[parseInt(kind[1], 10) - 1]);
   }
 
-  /** walk-over pickup (auto) — local player, any non-client mode or optimistic on client */
-  private tryLootPickup() {
-    if (this.gameMode !== 'br' || !this.player.alive || this.player.pos.y > 1.2) return;
+  /**
+   * Loot loop: supplies (ammo/medkit/vest) are auto-picked by walking over them.
+   * GUNS are NOT auto-picked — a SWAP prompt shows and the pickup happens only
+   * when the player presses E / the SWAP button, replacing the held weapon.
+   */
+  private tryLootPickup(now: number) {
+    if (this.gameMode !== 'br' || !this.player.alive || this.player.pos.y > 1.2) {
+      if (this.brSwapTarget !== null) { this.brSwapTarget = null; this.hud.setSwapHint(false); this.touch.showSwap(false); }
+      return;
+    }
     const p = this.player.pos;
+    let nearestId: number | null = null;
+    let nearestKind: LootKind | null = null;
+    let nearestD = Infinity;
+    const taken: number[] = [];
     this.loots.forEach((l, id) => {
       if (l.taken) return;
-      if (Math.abs(l.pos.x - p.x) < 1.15 && Math.abs(l.pos.z - p.z) < 1.15) {
-        l.taken = true;
-        this.world.scene.remove(l.mesh);
-        this.applyLoot(l.kind);
-        this.audio.pickup();
-        this.hud.toast(LOOT_LABEL[l.kind], 950);
-        if (this.mode === 'host') this.host?.broadcast({ t: 'ev', k: 'loot', i: id } as HostMsg);
-        else if (this.mode === 'client') this.client?.send({ t: 'loot', i: id });
+      const dx = Math.abs(l.pos.x - p.x), dz = Math.abs(l.pos.z - p.z);
+      if (dx > 1.15 || dz > 1.15) return;
+      if (l.kind.startsWith('w')) {
+        const d = dx + dz;
+        if (d < nearestD) { nearestD = d; nearestId = id; nearestKind = l.kind; }
+        return;
       }
+      // supplies: instant pickup
+      taken.push(id);
+      l.taken = true;
+      this.world.scene.remove(l.mesh);
+      this.applyLoot(l.kind);
+      this.audio.pickup();
+      this.hud.toast(LOOT_LABEL[l.kind], 950);
+      if (this.mode === 'host') this.host?.broadcast({ t: 'ev', k: 'loot', i: id } as HostMsg);
+      else if (this.mode === 'client') this.client?.send({ t: 'loot', i: id });
     });
+    void now;
+    if (nearestId !== null && nearestKind) {
+      if (this.brSwapTarget !== nearestId) this.touch.showSwap(true);
+      this.brSwapTarget = nearestId;
+      this.hud.setSwapHint(true, LOOT_LABEL[nearestKind]);
+    } else if (this.brSwapTarget !== null) {
+      this.brSwapTarget = null;
+      this.hud.setSwapHint(false);
+      this.touch.showSwap(false);
+    }
+  }
+
+  /** E key / SWAP button: exchange the held weapon with the ground gun below us */
+  private doBrSwap() {
+    if (this.gameMode !== 'br' || this.brSwapTarget === null || !this.player.alive) return;
+    const l = this.loots.get(this.brSwapTarget);
+    this.brSwapTarget = null;
+    this.hud.setSwapHint(false);
+    this.touch.showSwap(false);
+    if (!l || l.taken) return;
+    const gunIdx = BR_LOOT_GUNS[parseInt(l.kind[1], 10) - 1];
+    l.taken = true;
+    this.world.scene.remove(l.mesh);
+    const replaced = this.player.giveWeapon(gunIdx);
+    if (replaced !== -1 && this.mode !== 'client') this.dropWeapon(replaced);
+    this.audio.pickup();
+    this.hud.toast(`${LOOT_LABEL[l.kind]} EQUIPPED`, 950);
+    if (this.mode === 'host') this.host?.broadcast({ t: 'ev', k: 'loot', i: this.lootsKeyOf(l) } as HostMsg);
+    else if (this.mode === 'client') this.client?.send({ t: 'loot', i: this.lootsKeyOf(l) });
+  }
+
+  private lootsKeyOf(l: { kind: LootKind; pos: THREE.Vector3 }): number {
+    let found = -1;
+    this.loots.forEach((v, k) => { if (v === l) found = k; });
+    return found;
+  }
+
+  /** host/offline: the replaced gun lands on the ground as fresh loot */
+  private dropWeapon(idx: number) {
+    const li = BR_LOOT_GUNS.indexOf(idx);
+    if (li === -1) return;
+    const kind = ('w' + (li + 1)) as LootKind;
+    const id = this.lootSeq++;
+    const mesh = this.makeLootMesh(kind);
+    const px = this.player.pos.x + (Math.random() - 0.5) * 2.2;
+    const pz = this.player.pos.z + (Math.random() - 0.5) * 2.2;
+    mesh.position.set(px, 0.55, pz);
+    this.world.scene.add(mesh);
+    this.loots.set(id, { kind, pos: new THREE.Vector3(px, 0, pz), mesh, taken: false });
   }
 
   // ---- host (online) ----
   private clientRoom = '';
 
-  private startHost(name: string, botCount: number, diff: Difficulty, gameMode: GameMode, map: MapId) {
+  private startHost(name: string, _botCount: number, diff: Difficulty, gameMode: GameMode, map: MapId, loadout: Loadout) {
     this.audio.resume();
     this.cleanupNet();
     this.resetWorldEntities();
     this.mode = 'host';
     this.myId = '1';
     this.diff = diff;
-    this.gameMode = gameMode === 'br' ? 'br' : 'dm'; // online: DM or co-op Battle Royale
+    this.gameMode = gameMode === 'br' ? 'br' : gameMode === 'tdm' ? 'tdm' : 'dm'; // online: DM / TDM / co-op Battle Royale
+    this.hostLoadout = [loadout.knife, loadout.primary, loadout.backup];
+    this.player.limitedAmmo = this.gameMode === 'br';
+    if (this.gameMode !== 'br') {
+      this.player.setLoadout(loadout.knife, loadout.primary, loadout.backup);
+    }
     this.world.setMap(this.gameMode === 'br' ? 'warzone' : map);
     this.setupLocal(name);
-    this.initModeState(botCount);
+    this.initModeState(0, false); // MULTIPLAYER = NO BOTS, only real players
     this.menus.show('lobby');
     this.menus.setLobby('.....', 1);
     this.menus.setLobbyNote('Creating room...');
@@ -661,7 +741,20 @@ class Game {
     if (msg.t === 'hi') {
       const id = String(this.nextPeerNum++);
       this.connIds.set(conn, id);
-      const rp = new RemotePlayer(id, msg.name, this.gameMode === 'br'); // ally plates in co-op BR only
+      // teammates get a nameplate; enemies stay anonymous (no position leaks)
+      const myTeam = this.teams.get(this.myId) ?? 0;
+      let rp: RemotePlayer;
+      if (this.gameMode === 'tdm') {
+        const t = this.nextTeamFlip ? 1 : 0;
+        this.nextTeamFlip = !this.nextTeamFlip;
+        this.teams.set(id, t);
+        rp = new RemotePlayer(id, msg.name, t === myTeam);
+      } else if (this.gameMode === 'br') {
+        this.teams.set(id, Number(id)); // BR online: everyone is their own squad
+        rp = new RemotePlayer(id, msg.name, false);
+      } else {
+        rp = new RemotePlayer(id, msg.name, false);
+      }
       rp.hp = 100; rp.alive = true;
       this.world.scene.add(rp.group);
       this.remotes.set(id, rp);
@@ -671,18 +764,18 @@ class Game {
       this.names.forEach((n, i) => { namesObj[i] = n; });
       const scObj: Record<string, [number, number]> = {};
       this.scores.forEach((s, i) => { scObj[i] = [s.k, s.d]; });
-      // BR co-op: every human joins the host's squad
-      if (this.gameMode === 'br') this.teams.set(id, 0);
       const lootList: LootInit[] = this.gameMode === 'br'
         ? [...this.loots.entries()].filter(([, l]) => !l.taken)
           .map(([lid, l]) => [lid, l.kind, r2(l.pos.x), r2(l.pos.y), r2(l.pos.z)] as LootInit)
         : [];
       this.host!.send(conn as never, {
-        t: 'init', id, cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId, loot: lootList },
+        t: 'init', id, cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId, loot: lootList, loadout: this.hostLoadout },
         tm: this.state === 'playing' ? this.matchTime : CFG.matchTime, sc: scObj, names: namesObj,
       } as HostMsg);
       if (this.state === 'playing') {
-        const p = this.world.pickSpawn(this.alivePositions());
+        const p = this.gameMode === 'br'
+          ? new THREE.Vector3((Math.random() * 2 - 1) * 60, CFG.brPlaneY, (Math.random() * 2 - 1) * 60)
+          : this.world.pickSpawn(this.alivePositions());
         this.host!.send(conn as never, { t: 'ev', k: 'spawn', i: id, p: [p.x, p.y, p.z] } as HostMsg);
       }
       return;
@@ -701,6 +794,8 @@ class Game {
         this.audio.remoteShoot();
         this.fx.tracer(new THREE.Vector3(msg.p[0], msg.p[1] + 1.1, msg.p[2]),
           new THREE.Vector3(msg.p[0] - Math.sin(msg.y) * 30, msg.p[1] + 1.1 + Math.sin(msg.x) * 30, msg.p[2] - Math.cos(msg.y) * 30));
+        // bots hear the human gunfire and investigate
+        this.bots.forEach(b => b.hear(new THREE.Vector3(msg.p[0], msg.p[1], msg.p[2]), performance.now()));
       }
       this.prevShootFlags.set(id, msg.s === 1);
     } else if (msg.t === 'hit') {
@@ -725,6 +820,9 @@ class Game {
 
   private applyClientHit(attackerId: string, targetId: string, hs: boolean, o: THREE.Vector3, d: THREE.Vector3) {
     if (this.state !== 'playing') return;
+    // friendly fire is DISABLED in every team mode
+    const aTeam = this.teams.get(attackerId), tTeam = this.teams.get(targetId);
+    if (aTeam !== undefined && tTeam !== undefined && aTeam === tTeam && attackerId !== targetId) return;
     const attackerName = this.names.get(attackerId) ?? attackerId;
     const bot = this.bots.get(targetId);
     const rp = this.remotes.get(targetId);
@@ -787,6 +885,11 @@ class Game {
       this.gameMode = msg.cfg.mode ?? 'dm';
       if (msg.cfg.map) this.world.setMap(msg.cfg.map);
       if (msg.cfg.loot) this.spawnLootFromList(msg.cfg.loot);
+      if (msg.cfg.loadout && this.gameMode !== 'br') {
+        const [k, p, b] = msg.cfg.loadout;
+        this.player.limitedAmmo = false;
+        this.player.setLoadout(k, p, b);
+      }
       if (this.gameMode === 'br') this.buildZoneMeshes();
       this.player.spawnAt(new THREE.Vector3(0, 0, 30));
       this.player.enabled = false;
@@ -796,6 +899,11 @@ class Game {
       this.diff = msg.cfg.diff;
       this.gameMode = msg.cfg.mode ?? this.gameMode;
       if (msg.cfg.map) this.world.setMap(msg.cfg.map);
+      if (msg.cfg.loadout && this.gameMode !== 'br') {
+        const [k, p, b] = msg.cfg.loadout;
+        this.player.limitedAmmo = false;
+        this.player.setLoadout(k, p, b);
+      }
       if (this.gameMode === 'br') this.buildZoneMeshes();
       this.matchTime = this.gameMode === 'br' ? 9999 * 60 : CFG.matchTime;
       this.scores.forEach(s => { s.k = 0; s.d = 0; });
@@ -816,7 +924,7 @@ class Game {
         if (sp.i === this.myId) { this.player.hp = sp.hp; this.player.alive = sp.hp > 0; continue; }
         let rp = this.remotes.get(sp.i);
         if (!rp) {
-          rp = new RemotePlayer(sp.i, sp.n, this.gameMode === 'br');
+          rp = new RemotePlayer(sp.i, sp.n);
           this.world.scene.add(rp.group);
           this.remotes.set(sp.i, rp);
           if (!this.scores.has(sp.i)) this.scores.set(sp.i, { k: 0, d: 0 });
@@ -886,19 +994,21 @@ class Game {
 
   private entityHitMeshes(): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
+    // only LIVING entities are hittable — corpses on the ground can't be shot
     if (this.mode === 'client') {
-      this.botViews.forEach(v => out.push(...v.hitMeshes));
-      this.remotes.forEach(r => out.push(...r.hitMeshes));
+      this.botViews.forEach(v => { if (v.alive) out.push(...v.hitMeshes); });
+      this.remotes.forEach(r => { if (r.alive) out.push(...r.hitMeshes); });
     } else {
-      this.bots.forEach(b => out.push(...b.hitMeshes));
-      this.remotes.forEach(r => out.push(...r.hitMeshes));
+      this.bots.forEach(b => { if (b.alive) out.push(...b.hitMeshes); });
+      this.remotes.forEach(r => { if (r.alive) out.push(...r.hitMeshes); });
     }
     return out;
   }
 
   private onLocalShoot(origin: THREE.Vector3, dir: THREE.Vector3) {
-    // gunshot noise: nearby bots turn towards the shooter (they HEAR, no wallhack)
-    if (this.player.currentSpec.cat !== 'knife') this.alertBots(origin, 30);
+    // gunfire is audible: nearby bots come hunting (they still need LOS to see you)
+    const now = performance.now();
+    this.bots.forEach(b => b.hear(origin, now));
     const hit = this.world.raycast(origin, dir, this.player.currentSpec.range, this.entityHitMeshes());
     const end = hit ? hit.point : origin.clone().add(dir.clone().multiplyScalar(this.player.currentSpec.range));
     this.fx.muzzleFlash(this.player.vm.muzzleWorld);
@@ -910,11 +1020,18 @@ class Game {
     const isEntity = botId || remoteId;
     if (isEntity) {
       const targetId = botId ?? remoteId!;
-      // TDM friendly fire: shooting an ally just sparks, no damage/no hitmarker
-      if (this.gameMode === 'tdm' && this.teams.get(targetId) === this.teams.get(this.myId)) {
+      // friendly fire OFF in every team mode (tdm, br squads, co-op)
+      const myTeam = this.teams.get(this.myId);
+      const tTeam = this.teams.get(targetId);
+      if (tTeam !== undefined && myTeam !== undefined && tTeam === myTeam) {
         this.fx.sparks(hit.point, 0x8a8f70, 4);
         return;
       }
+      // battle royale: landing protection — can't hurt someone still dropping
+      const tBot = this.bots.get(targetId);
+      if (tBot && tBot.pos.y > 3) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
+      const tRp = this.remotes.get(targetId);
+      if (tRp && tRp.group.position.y > 3) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
       this.fx.sparks(hit.point, 0xb03226, 6);
       this.audio.hit();
       this.hud.hitmarker(!!hit.headshot);
@@ -939,20 +1056,13 @@ class Game {
     }
   }
 
-  /** alert hostile bots (not teammates) within radius that a shot was fired at `from` */
-  private alertBots(from: THREE.Vector3, radius: number) {
-    const myTeam = this.teams.get(this.myId);
-    this.bots.forEach(b => {
-      if (!b.alive) return;
-      if ((this.gameMode === 'tdm' || this.gameMode === 'br') && b.team === myTeam) return;
-      if (b.pos.distanceTo(from) > radius) return;
-      b.hear(from);
-    });
-  }
-
   private onBotShot(shot: BotShot) {
     this.fx.tracer(shot.from, shot.to, 0xff9c5b);
     if (!shot.targetId) return;
+    // battle royale landing protection: the local player can't be hurt while dropping
+    if (this.gameMode === 'br' && this.player.isAirborneOrLanding(performance.now())) return;
+    // battle royale landing protection: the local player can't be hurt while dropping
+    if (this.gameMode === 'br' && this.player.isAirborneOrLanding(performance.now())) return;
     // team modes: bots never target teammates, but guard anyway
     if ((this.gameMode === 'tdm' || this.gameMode === 'br') && this.teams.get(shot.targetId) !== undefined
         && this.teams.get(shot.targetId) === this.bots.get(this.shooterBotId(shot))?.team) return;
@@ -1036,7 +1146,7 @@ class Game {
       if (this.gameMode === 'gun' && killerId === this.myId) {
         const next = myKills; // ladder slot == kill count
         if (next >= GUN_GAME_LADDER.length) { this.endMatch(); return; }
-        this.player.switchWeapon(GUN_GAME_LADDER[next]);
+        this.player.setWeaponDirect(GUN_GAME_LADDER[next]);
         this.player.refillAll();
       }
       if (this.gameMode === 'tdm') {
@@ -1065,6 +1175,11 @@ class Game {
           this.hud.toast(`WAVE ${this.survWave} CLEARED`, 1800);
         }
       }
+    }
+    // online TDM (humans only): team kill limit checked on the host too
+    if (this.mode === 'host' && this.gameMode === 'tdm' && died) {
+      const [a, b] = this.teamKillTotals();
+      if (a >= CFG.tdmTargetKills || b >= CFG.tdmTargetKills) { this.endMatch(); return; }
     }
   }
 
@@ -1119,7 +1234,7 @@ class Game {
   private onLobbyStart = () => {
     if (this.mode !== 'host' || this.state !== 'lobby') return;
     if (this.gameMode !== 'br') this.matchTime = CFG.matchTime;
-    this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId } } as HostMsg);
+    this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId, loadout: this.hostLoadout } } as HostMsg);
     // give every connected client a spawn (BR: drop from the air)
     this.remotes.forEach((rp, id) => {
       const p = this.gameMode === 'br'
@@ -1144,9 +1259,9 @@ class Game {
     this.scores.set(this.myId, { k: 0, d: 0 });
     this.player.parachute = false;
     if (this.gameMode !== 'br') this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
-    this.initModeState(this.gameMode === 'gun' ? 5 : this.offlineBotCount);
+    this.initModeState(this.gameMode === 'gun' ? 5 : this.offlineBotCount, this.mode !== 'host');
     if (this.mode === 'host') {
-      this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId } } as HostMsg);
+      this.host?.broadcast({ t: 'ev', k: 'start', cfg: { bots: this.bots.size, diff: this.diff, mode: this.gameMode, map: this.world.mapId as MapId, loadout: this.hostLoadout } } as HostMsg);
       this.remotes.forEach((rp, id) => {
         if (!this.scores.has(id)) this.scores.set(id, { k: 0, d: 0 });
         rp.hp = 100;
@@ -1182,8 +1297,7 @@ class Game {
     if (this.gameMode === 'br') {
       const won = this.mode !== 'client' && this.brAliveEnemies() === 0 && this.brAliveAllies() > 0;
       const k = this.scores.get(this.myId)?.k ?? 0;
-      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU',
-        this.bots.size > 0 ? CFG.brEnemySquads + 1 : 0);
+      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU');
       return;
     }
     if (this.mode === 'offline' && this.gameMode === 'duel') {
@@ -1265,6 +1379,9 @@ class Game {
       e.preventDefault();
       this.showScoreboard(true);
     }
+    if (normKey(e) === 'KeyE' && !e.repeat && !this.paused && !this.menus.isVisible()) {
+      this.doBrSwap();
+    }
   };
   private onKeyup = (e: KeyboardEvent) => {
     if (normKey(e) === 'Tab') this.showScoreboard(false);
@@ -1278,20 +1395,19 @@ class Game {
 
   private onResize = () => this.applyLayout();
 
-  /** ADS view: fov zoom per weapon (aim blend smoothed in player) + sniper scope overlay.
-   *  While fully scoped the weapon model hides — it used to clip into the scope picture. */
+  /** ADS view: fov zoom per weapon (aim blend smoothed in player) + sniper scope overlay */
   private applyAimView(_dt: number) {
     const cam = this.world.camera;
-    const spec = this.player.currentSpec;
-    const zoom = spec.zoom ?? 1.25;
+    const zoom = WEAPONS[this.player.weaponIndex].zoom ?? 1.25;
     const target = CFG.baseFov / (1 + (zoom - 1) * this.player.aimAmount);
     if (Math.abs(cam.fov - target) > 0.01) {
       cam.fov = target;
       cam.updateProjectionMatrix();
     }
-    const scoped = !!spec.scope && this.player.aimAmount > 0.82;
+    const scoped = !!WEAPONS[this.player.weaponIndex].scope && this.player.aimAmount > 0.82;
     this.hud.setScope(scoped);
-    this.player.vm.setVisible(!scoped);
+    // clean scope picture: the gun model disappears when the scope is up (Bug: barrel in the scope)
+    this.player.vm.setScopedHidden(scoped);
   }
   private onBeforeUnload = () => {
     if (this.mode === 'client') this.client?.send({ t: 'bye' });
@@ -1405,7 +1521,8 @@ class Game {
 
     // loot & zone visuals (BR)
     if (this.gameMode === 'br') {
-      this.tryLootPickup();
+      this.tryLootPickup(now);
+      if (this.touch.consumeSwap()) this.doBrSwap();
       this.updateZoneVisuals();
       if (this.loots.size) {
         this.loots.forEach(l => {
@@ -1496,8 +1613,19 @@ class Game {
 
     // HUD
     this.hud.setHp(this.player.hp, this.player.armor);
-    this.hud.setAmmo(this.player.ammo, this.player.reloading);
+    this.hud.setAmmo(this.player.ammo, this.player.reloading, this.player.reserve);
     this.hud.setKD(this.scores.get(this.myId)?.k ?? 0, this.scores.get(this.myId)?.d ?? 0);
+    // 3-slot weapon bar (top-right) — rebuild only when it changes
+    const slots = this.player.slotWeapons;
+    const sig = `${slots[0]},${slots[1]},${slots[2]},${this.player.slotIndex},${this.gameMode}`;
+    if (sig !== this.lastSlotsSig) {
+      this.lastSlotsSig = sig;
+      this.hud.setSlots(slots.map((w, i) => ({
+        name: w === -1 ? '' : WEAPONS[w].name,
+        active: i === this.player.slotIndex,
+        empty: w === -1,
+      })));
+    }
     this.fx.update(dt);
   }
 
@@ -1540,9 +1668,9 @@ class Game {
     window.removeEventListener('keydown', this.onKeydown);
     window.removeEventListener('keyup', this.onKeyup);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
-    window.removeEventListener('orientationchange', this.onOrientationChange);
     window.removeEventListener('ns-lobby-start', this.onLobbyStart as EventListener);
     this.rotMq?.removeEventListener?.('change', this.onOrientationChange);
+    window.removeEventListener('deviceorientation', this.onDeviceTilt as EventListener);
     this.touch.destroy();
     this.player.dispose();
     this.world.dispose();
@@ -1555,17 +1683,15 @@ function botColor(id: string): number {
   return playerColor(id);
 }
 
-// ---- battle royale loot tables (BR carries far more items than any other mode) ----
+// ---- battle royale loot tables ----
 const LOOT_TABLE: [LootKind, number][] = [
-  ['w1', 5], ['w2', 8], ['w3', 7], ['w4', 9], ['w5', 7], ['w6', 5], ['w7', 4],
-  ['w8', 6], ['w9', 7], ['w10', 4], ['w11', 5], ['w12', 4],
-  ['k1', 3], ['k2', 2], ['k3', 2], ['k4', 2], ['k5', 2],
-  ['ammo', 12], ['med', 9], ['vest', 7],
+  ['w1', 4], ['w2', 7], ['w3', 6], ['w4', 6], ['w5', 7], ['w6', 9], ['w7', 8], ['w8', 6],
+  ['w9', 5], ['w10', 5], ['w11', 4], ['w12', 3], ['w13', 4],
+  ['ammo', 12], ['med', 8], ['vest', 6],
 ];
 const LOOT_COLORS: Record<LootKind, number> = {
-  w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc98d4e, w4: 0x9fb86e, w5: 0xc47a3a, w6: 0x7d9a55,
-  w7: 0xe0b35c, w8: 0xb0a06a, w9: 0x8a9a70, w10: 0x9a7a5a, w11: 0xc09060, w12: 0xd0b080,
-  k1: 0xb8c2c8, k2: 0x7fa8b8, k3: 0xc8b090, k4: 0xa8b0a0, k5: 0xd0c8e0,
+  w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc4b384, w4: 0xcfc06e, w5: 0xc98d4e, w6: 0x9fb86e,
+  w7: 0xd98e32, w8: 0xb0a86e, w9: 0xe0b35c, w10: 0x7d9a55, w11: 0x8f9a6a, w12: 0x7fa0a8, w13: 0xd8b25e,
   ammo: 0xd6b96a, med: 0xe07b6a, vest: 0x7f9fb5,
 };
 let lootGeo: THREE.BoxGeometry | null = null;

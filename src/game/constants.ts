@@ -43,7 +43,7 @@ export const CFG = {
   survivalPerWave: 1,   // bots added per wave
   survivalMaxAlive: 9,  // concurrent bots cap
   survivalIntermission: 5, // seconds between waves
-  gunGameTime: 420,     // 7 minutes (10-kill ladder)
+  gunGameTime: 360,     // 6 minutes
   // duel
   duelRounds: 3,        // first to 3 round wins
   duelRespawn: 2.2,     // seconds between duel rounds
@@ -57,8 +57,10 @@ export const CFG = {
   brZoneMin: 12,        // final zone radius
   brZonePhaseSec: 55,   // seconds per shrink phase
   brZoneHoldSec: 20,    // hold between phases
-  brLootCount: 150,     // loot spawns on the warzone map (far more items than any other mode)
+  brLootCount: 130,     // loot spawns on the warzone map
   brDmgBase: 5,         // zone dps at phase 0
+  brGraceMs: 2200,      // landing protection after touching the ground
+  brHearRadius: 30,     // meters a gunshot is audible to bots
 };
 
 /** offline game modes (online play is always deathmatch) */
@@ -130,24 +132,22 @@ export type ClientMsg =
 export type SnapPlayer = { i: string; p: Vec3Arr; y: number; x: number; m: 0 | 1; s: 0 | 1; hp: number; n: string };
 export type SnapBot = { i: string; p: Vec3Arr; y: number; hp: number; st: number };
 export type HostMsg =
-  | { t: 'init'; id: string; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId; loot?: LootInit[] }; tm: number; sc: Record<string, [number, number]>; names: Record<string, string> }
+  | { t: 'init'; id: string; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId; loot?: LootInit[]; loadout?: [number, number, number] }; tm: number; sc: Record<string, [number, number]>; names: Record<string, string> }
   | { t: 'snap'; tm: number; pl: SnapPlayer[]; bt: SnapBot[]; sc: Record<string, [number, number]>; zn?: [number, number, number, number] } // cx,cz,r,phase
   | { t: 'ev'; k: 'kill'; v: string; b: string; hs: boolean } // victim, by
   | { t: 'ev'; k: 'spawn'; i: string; p: Vec3Arr }
   | { t: 'ev'; k: 'dmg'; i: string; amt: number }
   | { t: 'ev'; k: 'loot'; i: number } // BR: loot id was taken
   | { t: 'ev'; k: 'end'; board: [string, string, number, number][] } // [id, name, kills, deaths]
-  | { t: 'ev'; k: 'start'; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId } };
+  | { t: 'ev'; k: 'start'; cfg: { bots: number; diff: Difficulty; mode?: GameMode; map?: MapId; loadout?: [number, number, number] } };
 
-/** BR loot kinds: weapon slots w1..w12 (see LOOT_GUNS in weapons.ts), knives k1..k5 (LOOT_KNIVES) plus supplies */
-export type LootKind = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'w6' | 'w7' | 'w8' | 'w9' | 'w10' | 'w11' | 'w12'
-  | 'k1' | 'k2' | 'k3' | 'k4' | 'k5' | 'ammo' | 'med' | 'vest';
+/** BR loot kinds: w1..w13 = guns (see BR_LOOT_GUNS) plus supplies */
+export type LootKind = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'w6' | 'w7' | 'w8' | 'w9' | 'w10' | 'w11' | 'w12' | 'w13' | 'ammo' | 'med' | 'vest';
 
 export const LOOT_LABEL: Record<LootKind, string> = {
-  w1: 'M9 SIDEARM', w2: 'MP5 SMG', w3: 'M870 SHOTGUN', w4: 'M4A1 RIFLE',
-  w5: 'AK-47', w6: 'M249 LMG', w7: 'AWM SNIPER', w8: 'SCAR-H',
-  w9: 'UMP-45', w10: 'SVD DRAGUNOV', w11: 'M1014 AUTO-SG', w12: 'DESERT EAGLE',
-  k1: 'TACTICAL KNIFE', k2: 'KARAMBIT', k3: 'BOWIE KNIFE', k4: 'MACHETE', k5: 'BUTTERFLY KNIFE',
+  w1: 'M9 SIDEARM', w2: 'MP5 SMG', w3: 'UMP-45', w4: 'VECTOR SMG',
+  w5: 'M870 SHOTGUN', w6: 'M4A1 RIFLE', w7: 'AK-47 RIFLE', w8: 'FAMAS RIFLE',
+  w9: 'MK14 DMR', w10: 'M249 LMG', w11: 'KAR98K SNIPER', w12: 'AWM SNIPER', w13: 'DESERT EAGLE',
   ammo: 'AMMO BOX', med: 'MEDKIT +50', vest: 'ARMOR VEST',
 };
 

@@ -40,7 +40,28 @@ export function injectStyles() {
 .ns-ammo-num.empty { color: #d24a35; text-shadow: 0 0 10px rgba(210,74,53,0.6); }
 .ns-ammo-sub { font-size: 14px; letter-spacing: 2px; color: #a08f6f; }
 .ns-ammo-sub .rel { color: #e6c35c; animation: ns-blink 0.6s infinite; }
+.ns-ammo-res { font-family: 'Black Ops One', sans-serif; font-size: 16px; color: #a08f6f; margin-left: 8px; }
 @keyframes ns-blink { 50% { opacity: 0.25; } }
+
+/* 3-slot weapon bar (top-right, tap to equip) */
+.ns-slots { position: absolute; top: 64px; right: 24px; display: flex; flex-direction: column; gap: 5px;
+  pointer-events: auto; z-index: 12; }
+.ns-slot { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 6px; min-width: 168px;
+  background: rgba(28,24,16,0.78); border: 1px solid #55492f; border-radius: 6px; cursor: pointer;
+  transition: border-color .12s, background .12s; }
+.ns-slot:hover { border-color: #b3a077; }
+.ns-slot.active { border-color: #d6b96a; background: rgba(214,185,106,0.14); box-shadow: 0 0 10px rgba(214,185,106,0.18); }
+.ns-slot.empty { opacity: 0.42; cursor: default; }
+.ns-slot-key { font-family: 'Black Ops One', sans-serif; font-size: 11px; color: #171410; background: #b3a077;
+  border-radius: 4px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex: none; }
+.ns-slot.active .ns-slot-key { background: #e6cfa0; }
+.ns-slot-name { font-size: 14px; font-weight: 700; letter-spacing: 1px; color: #e2d7ba; white-space: nowrap; }
+
+/* contextual ground-weapon swap prompt (BR) */
+.ns-swaphint { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); z-index: 12;
+  font-size: 16px; font-weight: 700; letter-spacing: 1px; color: #e6cfa0;
+  background: rgba(28,24,16,0.85); border: 1px solid #d6b96a; border-radius: 6px; padding: 7px 16px; }
+.ns-swaphint b { color: #e6c35c; }
 
 .ns-timer { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); text-align: center; }
 .ns-timer-time { font-family: 'Black Ops One', sans-serif; font-size: 25px; font-weight: 400; color: #f2ecd8; text-shadow: 0 2px 4px rgba(0,0,0,0.7); }
@@ -51,26 +72,13 @@ export function injectStyles() {
 .ns-room { position: absolute; top: 14px; right: 24px; font-size: 13px; letter-spacing: 2px; color: #cdb27a;
   background: rgba(30,26,18,0.72); border: 1px solid #6b5d43; padding: 6px 12px; border-radius: 4px; }
 
-/* 3-slot loadout chips (primary / secondary / knife) — click or tap to switch */
-.ns-slots { position: absolute; top: 54px; left: 24px; display: flex; gap: 6px; pointer-events: auto; }
-.ns-slot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: 4px;
-  background: rgba(30,26,18,0.72); border: 1px solid #55492f; cursor: pointer; user-select: none; -webkit-user-select: none;
-  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 1px; color: #a89873;
-  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s; }
-.ns-slot i { font-style: normal; font-size: 10px; width: 16px; height: 16px; line-height: 16px; text-align: center;
-  background: #3a3223; border: 1px solid #6b5d43; border-radius: 3px; color: #cdb27a; }
-.ns-slot.on { border-color: #d6b96a; color: #f0e6c8; box-shadow: 0 0 10px rgba(214,185,106,0.25); background: rgba(214,185,106,0.10); }
-.ns-slot.on i { background: #d6b96a; color: #1c1812; border-color: #d6b96a; }
-.ns-slot.empty { opacity: 0.45; }
-.ns-slot:hover { border-color: #b3a077; }
-
-.ns-feed { position: absolute; top: 64px; right: 24px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.ns-feed { position: absolute; top: 64px; left: 24px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .ns-feed-item { background: rgba(28,24,16,0.85); border: 1px solid #6b5d43; border-left: 3px solid #cdb27a;
   padding: 4px 10px; font-size: 14px; font-weight: 600; border-radius: 3px; animation: ns-feed-in 0.18s ease-out; }
 .ns-feed-item b { color: #e6c35c; }
 .ns-feed-item .vic { color: #d8836e; }
 .ns-feed-item.hs { border-left-color: #e08a2e; }
-@keyframes ns-feed-in { from { transform: translateX(30px); opacity: 0; } }
+@keyframes ns-feed-in { from { transform: translateX(-30px); opacity: 0; } }
 
 .ns-hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) rotate(45deg); width: 22px; height: 22px; opacity: 0; }
 .ns-hitmarker span { position: absolute; background: #fff; box-shadow: 0 0 4px #fff; }
@@ -196,30 +204,26 @@ export function injectStyles() {
 .ns-tbtn.reload { right: 34px; bottom: 204px; width: 58px; height: 58px; font-size: 11px; }
 .ns-tbtn.crouch { right: 108px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
 .ns-tbtn.crouch.on { border-color: #9fb86e; color: #c9d8a4; }
-.ns-tbtn.wpn { right: 176px; bottom: 116px; width: 60px; height: 60px; font-size: 12px; }
-.ns-tbtn.aim { right: 244px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
+.ns-tbtn.aim { right: 176px; bottom: 116px; width: 60px; height: 60px; font-size: 11px; }
 .ns-tbtn.aim.on { border-color: #e6c35c; color: #f0e0ac; box-shadow: 0 0 16px rgba(230,195,92,0.45); background: rgba(230,195,92,0.14); }
+.ns-tbtn.swap { left: 24px; bottom: 216px; width: 88px; height: 56px; border-radius: 10px; font-size: 13px;
+  border-color: #9fb86e; color: #cfe0a4; background: rgba(52,64,32,0.55); }
 .ns-tbtn.sb { left: 22px; top: 66px; width: 52px; height: 40px; border-radius: 8px; font-size: 10px; }
 .ns-tbtn.pause { left: 50%; margin-left: 86px; top: 12px; width: 46px; height: 46px; font-size: 13px; letter-spacing: 2px; }
 
 /* forced landscape: render the game rotated 90° on portrait phones.
-   The whole game runs in landscape even when the device is not rotated. */
+   The whole game runs in landscape even when the device is not rotated.
+   Direction follows how the phone is physically held (no inverted controls). */
 .ns-root.ns-forced-landscape {
   width: 100vh; height: 100vw;
   transform-origin: left top;
   transform: rotate(90deg) translateY(-100%);
 }
-
-/* rotate-your-phone hint (non-blocking banner) */
-.ns-rotate-hint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 70;
-  display: flex; align-items: center; gap: 10px; pointer-events: none;
-  background: rgba(20,17,11,0.88); border: 1px solid #6b5d43; border-radius: 8px; padding: 8px 14px;
-  font-family: 'Black Ops One', sans-serif; font-size: 12px; letter-spacing: 2px; color: #cdb27a;
-  text-align: left; line-height: 1.45; animation: ns-blink 2.4s infinite; }
-.ns-rotate-hint span { font-size: 10px; color: #a08f6f; letter-spacing: 1px; }
-.ns-rotate-icon-sm { display: inline-block; width: 20px; height: 30px; border: 2px solid #cdb27a; border-radius: 4px;
-  animation: ns-rot 1.8s ease-in-out infinite; flex: none; }
-@keyframes ns-rot { 0%, 25% { transform: rotate(0deg); } 65%, 100% { transform: rotate(-90deg) scaleY(0.72); } }
+.ns-root.ns-forced-landscape-flip {
+  width: 100vh; height: 100vw;
+  transform-origin: left top;
+  transform: translateY(100vh) rotate(-90deg);
+}
 
 /* HUD adjustments while touch controls are active */
 .ns-touch-mode .ns-root-canvas, .ns-touch-mode canvas { touch-action: none; }
@@ -228,10 +232,9 @@ export function injectStyles() {
 .ns-root.ns-touch-mode .ns-hp-wrap { bottom: 200px; width: 190px; left: 20px; }
 .ns-root.ns-touch-mode .ns-crouch-ind { bottom: auto; top: 66px; }
 .ns-root.ns-touch-mode .ns-hint { display: none; }
-.ns-root.ns-touch-mode .ns-feed { top: 64px; right: 18px; max-width: 60vw; }
-.ns-root.ns-touch-mode .ns-tbtn.sb { top: 112px; }
-.ns-root.ns-touch-mode .ns-slot { padding: 5px 12px 5px 7px; font-size: 14px; }
-.ns-root.ns-touch-mode .ns-slot i { width: 19px; height: 19px; line-height: 19px; font-size: 11px; }
+.ns-root.ns-touch-mode .ns-slots { top: 64px; right: 18px; }
+.ns-slot { min-width: 150px; }
+.ns-root.ns-touch-mode .ns-feed { top: 64px; left: 84px; max-width: 52vw; }
 @media (max-width: 760px) {
   .ns-menu-inner { padding: 22px 18px; }
   .ns-title { font-size: 36px; letter-spacing: 3px; }

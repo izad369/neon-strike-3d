@@ -38,28 +38,7 @@ export class ViewModel {
       if (m.isMesh) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
     }
 
-    // ----- knives: blade + guard + grip (held low-right, quick swipe pose) -----
-    if (spec.cat === 'knife') {
-      const bladeMat = new THREE.MeshLambertMaterial({ color: spec.bladeColor ?? 0xb8c2c8, emissive: 0x1a2026 });
-      const gripMat = new THREE.MeshLambertMaterial({ color: 0x2c2620 });
-      const guardMat = new THREE.MeshLambertMaterial({ color: 0x54483a });
-      const bl = spec.bladeLen ?? 0.26, bw = spec.bladeW ?? 0.045;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.012, bl), bladeMat);
-      blade.position.set(0, 0.01, -bl / 2 - 0.05);
-      const edge = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.5, 0.006, bl * 0.92), new THREE.MeshBasicMaterial({ color: 0xe8eef2 }));
-      edge.position.set(0, 0.022, -bl / 2 - 0.05);
-      const guard = new THREE.Mesh(new THREE.BoxGeometry(bw * 2.2, 0.02, 0.02), guardMat);
-      guard.position.set(0, 0.01, -0.045);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.045, 0.13), gripMat);
-      grip.position.set(0, 0, 0.03);
-      grip.rotation.x = 0.18;
-      this.group.add(blade, edge, guard, grip);
-      this.group.position.set(0.26, -0.24, -0.5);
-      this.group.rotation.set(0.1, -0.5, 0.15);
-      this.muzzle.position.set(0, 0, -0.2);
-      this.group.add(this.muzzle);
-      return;
-    }
+    if (spec.melee) { this.rebuildMelee(spec); return; }
 
     const gunmetal = spec.wood ? 0x4a3f2c : 0x39372e;
     const bodyMat = new THREE.MeshLambertMaterial({ color: gunmetal });
@@ -139,6 +118,45 @@ export class ViewModel {
     this.group.rotation.y = -0.04;
   }
 
+  /** blade + handle for knife-type weapons (karambit curves, katana is long) */
+  private rebuildMelee(spec: WeaponSpec) {
+    const gripMat = new THREE.MeshLambertMaterial({ color: spec.id === 'katana' ? 0x2c2c34 : 0x4a3a26 });
+    const bladeMat = new THREE.MeshLambertMaterial({ color: 0xb9bec4 });
+    const steelMat = new THREE.MeshBasicMaterial({ color: 0xd8dde2 });
+    const long = spec.id === 'katana' ? 1.7 : spec.id === 'machete' ? 1.35 : 1;
+
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.17), gripMat);
+    handle.position.set(0, -0.02, 0.1);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.02, 0.03), steelMat);
+    guard.position.set(0, -0.02, 0.005);
+
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.055 * (spec.id === 'karambit' ? 0.8 : 1), 0.42 * long), bladeMat);
+    blade.position.set(0, -0.005, -0.21 * long);
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.02, 0.42 * long), steelMat);
+    edge.position.set(0, -0.032, -0.21 * long);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12 * long, 4), bladeMat);
+    tip.rotation.x = -Math.PI / 2;
+    tip.rotation.z = Math.PI / 4;
+    tip.position.set(0, -0.005, -0.44 * long);
+
+    const parts: THREE.Object3D[] = [handle, guard, blade, edge, tip];
+    if (spec.id === 'karambit') { // hooked finger ring
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.011, 6, 14), gripMat);
+      ring.position.set(0, -0.06, 0.16);
+      parts.push(ring);
+    }
+
+    const muzzleZ = -0.45 * long;
+    this.muzzle.position.set(0, 0, muzzleZ);
+    parts.push(this.muzzle);
+
+    // held low & angled, like a reverse-grip combat knife
+    this.group.add(...parts);
+    this.group.position.copy(this.basePos);
+    this.group.position.y += 0.06;
+    this.group.rotation.set(0.35, -0.28, -0.2);
+  }
+
   get muzzleWorld(): THREE.Vector3 {
     const v = new THREE.Vector3();
     this.muzzle.getWorldPosition(v);
@@ -151,18 +169,6 @@ export class ViewModel {
     this.recoil = Math.max(0, this.recoil - dt * 6);
     if (moving) this.bobT += dt * (crouching ? 7 : 11);
 
-    // knife: swipe animation on attack (recoil drives it), rest pose stays low-right
-    if (this.spec.cat === 'knife') {
-      const swipe = this.recoil; // 0..1
-      this.group.position.set(
-        0.26 - swipe * 0.16,
-        -0.24 + Math.sin(this.bobT) * (moving ? 0.008 : 0.002) - swipe * 0.05,
-        -0.5 - swipe * 0.16
-      );
-      this.group.rotation.set(0.1 + swipe * 0.5, -0.5 + swipe * 0.4, 0.15 - swipe * 0.3);
-      return;
-    }
-
     // weapon sway follows look pitch (damped while aiming)
     const swayMul = 1 - aimAmt * 0.85;
     const targetSwayY = THREE.MathUtils.clamp(pitch * -0.03, -0.05, 0.05) * swayMul;
@@ -173,6 +179,21 @@ export class ViewModel {
     const kick = this.recoil * 0.09;
     const reloadDip = reloading ? 0.22 * (1 - aimAmt * 0.5) : 0;
     this.crouchDip += ((crouching ? 0.05 : 0) - this.crouchDip) * dt * 8;
+
+    // melee pose: low angled grip with a swing kick — no ADS lerp (knives don't aim)
+    if (this.spec.melee) {
+      this.group.position.set(
+        this.basePos.x + bobX,
+        this.basePos.y + 0.06 + bobY - this.recoil * 0.02 - this.crouchDip * 0.7 + this.swayY,
+        this.basePos.z + kick
+      );
+      this.group.rotation.set(
+        0.35 + this.recoil * 0.55 + (reloading ? 0.3 : 0),
+        -0.28,
+        -0.2 + this.swayY
+      );
+      return;
+    }
 
     // hip-fire pose <-> ADS pose (gun slides to screen center, sights up)
     const px = THREE.MathUtils.lerp(this.basePos.x, this.adsPos.x, aimAmt) + bobX;
@@ -185,6 +206,9 @@ export class ViewModel {
   }
 
   setVisible(v: boolean) { this.group.visible = v; }
+
+  /** scoped weapons hide the gun entirely when fully aimed (clean scope picture) */
+  setScopedHidden(hidden: boolean) { this.group.visible = !hidden; }
 
   dispose() {
     this.group.traverse(o => {

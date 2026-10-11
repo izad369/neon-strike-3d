@@ -24,12 +24,15 @@ export class HUD {
   private armorChipEl!: HTMLElement;
   private zoneWarnEl!: HTMLElement;
   private respawnLabelEl!: HTMLElement;
-  private slotEls: HTMLElement[] = [];
-  /** set by main: tapping a slot chip selects that loadout slot */
-  onSlotPick: ((slot: number) => void) | null = null;
+  private ammoResEl!: HTMLElement;
+  private slotsEl!: HTMLElement;
+  private swaphintEl!: HTMLElement;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private vignetteTimer: ReturnType<typeof setTimeout> | null = null;
   private hmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** tap-to-equip weapon slot bar (top-right, like famous shooters) */
+  onSlotTap: ((slot: number) => void) | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -41,11 +44,6 @@ export class HUD {
       <div class="ns-timer"><div class="ns-timer-time">5:00</div><div class="ns-timer-mode">Deathmatch</div></div>
       <div class="ns-kd"><b>0</b> K &nbsp;/&nbsp; 0 D</div>
       <div class="ns-room"></div>
-      <div class="ns-slots">
-        <div class="ns-slot" data-slot="0"><i>1</i><span>—</span></div>
-        <div class="ns-slot" data-slot="1"><i>2</i><span>—</span></div>
-        <div class="ns-slot" data-slot="2"><i>3</i><span>—</span></div>
-      </div>
       <div class="ns-feed"></div>
       <div class="ns-hitmarker"><span></span><span></span><span></span><span></span></div>
       <div class="ns-hp-wrap">
@@ -56,6 +54,8 @@ export class HUD {
         <div class="ns-ammo-num">30</div>
         <div class="ns-ammo-sub"><span class="ns-ammo-mag">RIFLE</span> &bull; <span class="ns-ammo-state">READY</span></div>
       </div>
+      <div class="ns-slots"></div>
+      <div class="ns-swaphint ns-hidden"></div>
       <div class="ns-toast ns-hidden"></div>
       <div class="ns-crouch-ind">CROUCHED</div>
       <div class="ns-zone-warn ns-hidden">⚠ OUTSIDE THE ZONE — GET BACK!</div>
@@ -79,25 +79,11 @@ export class HUD {
     this.armorChipEl = q('.ns-armor-chip');
     this.zoneWarnEl = q('.ns-zone-warn');
     this.respawnLabelEl = q('.ns-respawn-label');
-    // loadout slot chips (click / tap to swap weapons, famous-shooter style)
-    this.slotEls = [0, 1, 2].map(i => this.root.querySelector(`.ns-slot[data-slot="${i}"]`) as HTMLElement);
-    this.slotEls.forEach(el => {
-      const pick = (e: Event) => {
-        e.preventDefault(); e.stopPropagation();
-        this.onSlotPick?.(parseInt(el.dataset.slot!, 10));
-      };
-      el.addEventListener('pointerdown', pick);
-      el.addEventListener('touchstart', pick, { passive: false });
-    });
-  }
-
-  /** refresh the 3 loadout chips (primary / secondary / knife) */
-  setSlots(names: [string, string, string], active: number) {
-    this.slotEls.forEach((el, i) => {
-      el.querySelector('span')!.textContent = names[i];
-      el.classList.toggle('on', i === active);
-      el.classList.toggle('empty', names[i] === '—');
-    });
+    this.ammoResEl = document.createElement('span');
+    this.ammoResEl.className = 'ns-ammo-res';
+    q('.ns-ammo').appendChild(this.ammoResEl);
+    this.slotsEl = q('.ns-slots');
+    this.swaphintEl = q('.ns-swaphint');
   }
 
   show(v: boolean) { this.root.classList.toggle('ns-hidden', !v); }
@@ -110,14 +96,40 @@ export class HUD {
     this.armorChipEl.classList.toggle('ns-hidden', armor <= 0);
     if (armor > 0) this.armorChipEl.textContent = `VEST ${Math.round(armor)}`;
   }
-  setAmmo(cur: number, reloading: boolean) {
-    const knife = cur < 0;
-    this.ammoNum.textContent = knife ? '∞' : String(cur);
-    this.ammoNum.classList.toggle('empty', !knife && cur === 0 && !reloading);
-    this.ammoSub.textContent = knife ? 'MELEE' : reloading ? 'RELOADING' : cur === 0 ? 'EMPTY' : 'READY';
-    this.ammoSub.className = 'ns-ammo-state' + (reloading && !knife ? ' rel' : '');
+  setAmmo(cur: number, reloading: boolean, reserve = Infinity) {
+    this.ammoNum.textContent = String(cur);
+    this.ammoNum.classList.toggle('empty', cur === 0 && !reloading);
+    this.ammoSub.textContent = reloading ? 'RELOADING' : cur === 0 ? 'EMPTY' : 'READY';
+    this.ammoSub.className = 'ns-ammo-state' + (reloading ? ' rel' : '');
+    this.ammoResEl.textContent = Number.isFinite(reserve) ? `/ ${reserve}` : '';
   }
   setWeaponName(name: string) { this.weaponNameEl.textContent = name; }
+
+  /**
+   * Render the 3-slot weapon bar (knife / primary / backup) in the top-right
+   * corner. Click/tap a slot to put that weapon in your hands.
+   */
+  setSlots(slots: { name: string; active: boolean; empty: boolean }[]) {
+    this.slotsEl.innerHTML = '';
+    slots.forEach((s, i) => {
+      const div = document.createElement('div');
+      div.className = 'ns-slot' + (s.active ? ' active' : '') + (s.empty ? ' empty' : '');
+      div.innerHTML = `<span class="ns-slot-key">${i + 1}</span><span class="ns-slot-name">${s.empty ? '—' : esc(s.name)}</span>`;
+      if (!s.empty) {
+        div.addEventListener('pointerdown', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          this.onSlotTap?.(i);
+        });
+      }
+      this.slotsEl.appendChild(div);
+    });
+  }
+
+  /** contextual "swap weapon" prompt (BR ground pickup — E key or SWAP button) */
+  setSwapHint(show: boolean, name = '') {
+    this.swaphintEl.classList.toggle('ns-hidden', !show);
+    if (show) this.swaphintEl.innerHTML = `SWAP &laquo;${esc(name)}&raquo; &mdash; <b>E</b>`;
+  }
 
   /** center-screen fading toast: weapon switch, wave banner, gun-game progress */
   toast(text: string, ms = 1400) {
