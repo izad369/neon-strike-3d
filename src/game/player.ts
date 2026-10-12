@@ -138,7 +138,7 @@ export class LocalPlayer {
     this.reloading = false;
   }
 
-  /** BR ammo box: top up the current mag + a few spare mags of reserve */
+  /** BR ammo crate: top up the current mag + a few spare mags of reserve */
   refillCurrent() {
     const w = this.slots[this.slot];
     if (w === -1) return;
@@ -147,6 +147,28 @@ export class LocalPlayer {
       this.reserves[w] = Math.min(WEAPONS[w].magSize * 6, this.reserves[w] + WEAPONS[w].magSize * 3);
     }
     this.reloading = false;
+  }
+
+  /** BR ammo crate: top up EVERY carried gun (mags + spare mags) — works while holding the knife too */
+  refillAmmoAll() {
+    for (let s = 0; s < 3; s++) {
+      const w = this.slots[s];
+      if (w === -1 || WEAPONS[w].melee) continue;
+      this.mags[w] = WEAPONS[w].magSize;
+      if (this.limitedAmmo) this.reserves[w] = Math.min(WEAPONS[w].magSize * 6, this.reserves[w] + WEAPONS[w].magSize * 3);
+      else this.reserves[w] = Infinity;
+    }
+    this.reloading = false;
+  }
+
+  /** BR: is any carried gun missing mag / spare ammo? (ammo crates stay on the ground otherwise) */
+  needsAmmo(): boolean {
+    for (let s = 0; s < 3; s++) {
+      const w = this.slots[s];
+      if (w === -1 || WEAPONS[w].melee) continue;
+      if (this.mags[w] < WEAPONS[w].magSize || this.reserves[w] < WEAPONS[w].magSize * 6) return true;
+    }
+    return false;
   }
 
   /**

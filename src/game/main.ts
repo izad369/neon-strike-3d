@@ -16,7 +16,7 @@ import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
 import { loadSoldier } from './assets';
 import { playerColor } from './avatar';
-import { WEAPONS, GUN_GAME_LADDER, BR_LOOT_GUNS } from './weapons';
+import { WEAPONS, GUN_GAME_LADDER, BR_LOOT_GUNS, WeaponSpec } from './weapons';
 import { Loadout } from './menus';
 
 type Mode = 'offline' | 'host' | 'client';
@@ -76,7 +76,7 @@ class Game {
   private brZoneRing: THREE.Mesh | null = null;
   private brZoneDmgAt = 0;
   private brCheckAt = 0;
-  private loots = new Map<number, { kind: LootKind; pos: THREE.Vector3; mesh: THREE.Mesh; taken: boolean }>();
+  private loots = new Map<number, { kind: LootKind; pos: THREE.Vector3; mesh: THREE.Mesh; taken: boolean; spin: boolean }>();
   private lootSeq = 1;
   private brPlane: THREE.Group | null = null;
   private zoneSync: ZoneInfo | null = null; // client: zone from host snapshots
@@ -564,12 +564,17 @@ class Game {
   }
 
   private makeLootMesh(kind: LootKind): THREE.Mesh {
-    if (!lootGeo) lootGeo = new THREE.BoxGeometry(0.36, 0.36, 0.36);
-    let mat = lootMats.get(kind);
-    if (!mat) { mat = new THREE.MeshBasicMaterial({ color: LOOT_COLORS[kind] }); lootMats.set(kind, mat); }
-    const mesh = new THREE.Mesh(lootGeo, mat);
-    if (kind.startsWith('w')) mesh.scale.setScalar(1.3);
-    return mesh;
+    let geo = lootGeos.get(kind);
+    if (!geo) {
+      const parts = kind.startsWith('w')
+        ? gunLootParts(WEAPONS[BR_LOOT_GUNS[lootGunIdx(kind) - 1]])
+        : kind === 'ammo' ? ammoLootParts() : kind === 'med' ? medLootParts() : vestLootParts();
+      parts.push(haloLootPart(kind));
+      geo = mergeLootParts(parts);
+      lootGeos.set(kind, geo);
+    }
+    if (!lootMat) lootMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    return new THREE.Mesh(geo, lootMat);
   }
 
   /** scatter loot over the warzone loot anchors (offline + host) */
@@ -579,9 +584,11 @@ class Game {
       const kind = this.rollLoot();
       const id = this.lootSeq++;
       const mesh = this.makeLootMesh(kind);
-      mesh.position.set(p.x, 0.55, p.z);
+      const spin = !kind.startsWith('w');
+      if (spin) mesh.position.set(p.x, 0.52, p.z);
+      else { mesh.position.set(p.x, 0.12, p.z); mesh.rotation.y = Math.random() * Math.PI * 2; }
       this.world.scene.add(mesh);
-      this.loots.set(id, { kind, pos: p.clone(), mesh, taken: false });
+      this.loots.set(id, { kind, pos: p.clone(), mesh, taken: false, spin });
     }
   }
 
@@ -590,9 +597,11 @@ class Game {
     this.clearLoot();
     for (const [id, kind, x, , z] of list) {
       const mesh = this.makeLootMesh(kind);
-      mesh.position.set(x, 0.55, z);
+      const spin = !kind.startsWith('w');
+      if (spin) mesh.position.set(x, 0.52, z);
+      else { mesh.position.set(x, 0.12, z); mesh.rotation.y = Math.random() * Math.PI * 2; }
       this.world.scene.add(mesh);
-      this.loots.set(id, { kind, pos: new THREE.Vector3(x, 0, z), mesh, taken: false });
+      this.loots.set(id, { kind, pos: new THREE.Vector3(x, 0, z), mesh, taken: false, spin });
     }
   }
 
@@ -602,10 +611,18 @@ class Game {
   }
 
   private applyLoot(kind: LootKind) {
-    if (kind === 'ammo') this.player.refillCurrent();
+    if (kind === 'ammo') this.player.refillAmmoAll();
     else if (kind === 'med') this.player.heal(50);
     else if (kind === 'vest') this.player.armor = 100;
-    else this.player.giveWeapon(BR_LOOT_GUNS[parseInt(kind[1], 10) - 1]);
+    else this.player.giveWeapon(BR_LOOT_GUNS[lootGunIdx(kind) - 1]);
+  }
+
+  /** would walking over this supply item actually help right now? (BR loot is scarce — don't waste it) */
+  private lootUseful(kind: LootKind): boolean {
+    if (kind === 'med') return this.player.hp < CFG.playerHp - 0.5;
+    if (kind === 'vest') return this.player.armor < 99;
+    if (kind === 'ammo') return this.player.needsAmmo();
+    return true;
   }
 
   /**
@@ -632,7 +649,8 @@ class Game {
         if (d < nearestD) { nearestD = d; nearestId = id; nearestKind = l.kind; }
         return;
       }
-      // supplies: instant pickup
+      // supplies: instant pickup — but only when it actually helps (else leave it on the ground)
+      if (!this.lootUseful(l.kind)) return;
       taken.push(id);
       l.taken = true;
       this.world.scene.remove(l.mesh);
@@ -662,7 +680,7 @@ class Game {
     this.hud.setSwapHint(false);
     this.touch.showSwap(false);
     if (!l || l.taken) return;
-    const gunIdx = BR_LOOT_GUNS[parseInt(l.kind[1], 10) - 1];
+    const gunIdx = BR_LOOT_GUNS[lootGunIdx(l.kind) - 1];
     l.taken = true;
     this.world.scene.remove(l.mesh);
     const replaced = this.player.giveWeapon(gunIdx);
@@ -688,9 +706,10 @@ class Game {
     const mesh = this.makeLootMesh(kind);
     const px = this.player.pos.x + (Math.random() - 0.5) * 2.2;
     const pz = this.player.pos.z + (Math.random() - 0.5) * 2.2;
-    mesh.position.set(px, 0.55, pz);
+    mesh.position.set(px, 0.12, pz);
+    mesh.rotation.y = Math.random() * Math.PI * 2;
     this.world.scene.add(mesh);
-    this.loots.set(id, { kind, pos: new THREE.Vector3(px, 0, pz), mesh, taken: false });
+    this.loots.set(id, { kind, pos: new THREE.Vector3(px, 0, pz), mesh, taken: false, spin: false });
   }
 
   // ---- host (online) ----
@@ -1534,8 +1553,9 @@ class Game {
       if (this.loots.size) {
         this.loots.forEach(l => {
           if (l.taken) return;
+          if (!l.spin) return; // guns lie flat on the ground at a fixed angle
           l.mesh.rotation.y += dt * 1.5;
-          l.mesh.position.y = 0.55 + Math.sin(now * 0.0028 + l.pos.x * 3.1) * 0.09;
+          l.mesh.position.y = 0.52 + Math.sin(now * 0.0028 + l.pos.x * 3.1) * 0.09;
         });
       }
       if (this.brPlane) {
@@ -1690,19 +1710,149 @@ function botColor(id: string): number {
   return playerColor(id);
 }
 
-// ---- battle royale loot tables ----
+// ---- battle royale loot ----
 const LOOT_TABLE: [LootKind, number][] = [
   ['w1', 4], ['w2', 7], ['w3', 6], ['w4', 6], ['w5', 7], ['w6', 9], ['w7', 8], ['w8', 6],
   ['w9', 5], ['w10', 5], ['w11', 4], ['w12', 3], ['w13', 4],
   ['ammo', 12], ['med', 8], ['vest', 6],
 ];
-const LOOT_COLORS: Record<LootKind, number> = {
+/** glow-ring color under each ground item (kind identification at a glance) */
+const LOOT_HALO: Record<LootKind, number> = {
   w1: 0xd8cfae, w2: 0xb9a76a, w3: 0xc4b384, w4: 0xcfc06e, w5: 0xc98d4e, w6: 0x9fb86e,
   w7: 0xd98e32, w8: 0xb0a86e, w9: 0xe0b35c, w10: 0x7d9a55, w11: 0x8f9a6a, w12: 0x7fa0a8, w13: 0xd8b25e,
   ammo: 0xd6b96a, med: 0xe07b6a, vest: 0x7f9fb5,
 };
-let lootGeo: THREE.BoxGeometry | null = null;
-const lootMats = new Map<LootKind, THREE.MeshBasicMaterial>();
+
+/** 'w13' -> 13 (kind[1] would wrongly parse 'w10'-'w13' as w1) */
+function lootGunIdx(kind: LootKind): number {
+  return parseInt(kind.slice(1), 10);
+}
+
+// every ground item is ONE merged geometry with baked vertex colors => 1 draw call per item
+type LootPart = { geo: THREE.BufferGeometry; m: THREE.Matrix4; c: number };
+const _lootCol = new THREE.Color();
+
+function mergeLootParts(parts: LootPart[]): THREE.BufferGeometry {
+  const pos: number[] = [], norm: number[] = [], col: number[] = [];
+  for (const p of parts) {
+    const g = p.geo.toNonIndexed();
+    g.applyMatrix4(p.m);
+    const pa = g.getAttribute('position'), na = g.getAttribute('normal');
+    _lootCol.setHex(p.c);
+    for (let i = 0; i < pa.count; i++) {
+      pos.push(pa.getX(i), pa.getY(i), pa.getZ(i));
+      norm.push(na.getX(i), na.getY(i), na.getZ(i));
+      col.push(_lootCol.r, _lootCol.g, _lootCol.b);
+    }
+    g.dispose();
+    p.geo.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return geo;
+}
+
+function boxPart(sx: number, sy: number, sz: number, px: number, py: number, pz: number, c: number, ry = 0, rz = 0): LootPart {
+  const geo = new THREE.BoxGeometry(sx, sy, sz);
+  const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(0, ry, rz));
+  m.setPosition(px, py, pz);
+  return { geo, m, c };
+}
+
+/** cylinder along Y (rz=0) or lying along X (rz=PI/2) */
+function cylPart(r: number, h: number, px: number, py: number, pz: number, c: number, rz = 0): LootPart {
+  const geo = new THREE.CylinderGeometry(r, r, h, 6);
+  const m = new THREE.Matrix4().makeRotationZ(rz);
+  m.setPosition(px, py, pz);
+  return { geo, m, c };
+}
+
+const LOOT_GUNMETAL = 0x3f434a, LOOT_DARK = 0x24272c, LOOT_POLY = 0x5a5340, LOOT_WOOD = 0x6e4a2a, LOOT_GLASS = 0x9fd8e8;
+
+/** a true gun silhouette per weapon spec (receiver / barrel / grip / mag / stock / scope) */
+function gunLootParts(spec: WeaponSpec): LootPart[] {
+  const bodyH = 0.085, bodyW = 0.06;
+  const stockLen = spec.stock ? 0.2 : 0.06;
+  const total = spec.bodyLen + spec.barrelLen + stockLen;
+  const k = Math.min(1.7, Math.max(0.95, 0.9 / total)); // normalize silhouette length
+  const Y = 0.2;                                        // lift so nothing clips the ground
+  const sh = -total / 2;                                // stock/rear edge
+  const bx = sh + stockLen;                             // receiver start
+  const barrelX = bx + spec.bodyLen;
+  const parts: LootPart[] = [];
+  parts.push(boxPart(spec.bodyLen * k, bodyH * k, bodyW * k, bx + spec.bodyLen / 2, Y, 0, LOOT_GUNMETAL));
+  const bw = Math.max(0.026, spec.barrelW * 3 * k);
+  parts.push(boxPart(spec.barrelLen * k, bw, bw, barrelX + spec.barrelLen / 2, Y + bodyH * 0.15 * k, 0, LOOT_DARK));
+  parts.push(boxPart(0.028 * k, 0.05 * k, 0.02 * k, barrelX + spec.barrelLen * 0.2, Y + (bodyH * 0.5 + 0.024) * k, 0, LOOT_DARK)); // front sight
+  parts.push(boxPart(0.05 * k, 0.16 * k, 0.048 * k, bx + spec.bodyLen * 0.22, Y - 0.09 * k, 0, LOOT_DARK, 0, 0.26));              // grip
+  if (spec.drum) parts.push(boxPart(0.15 * k, 0.15 * k, 0.09 * k, bx + spec.bodyLen * 0.5, Y - 0.12 * k, 0, LOOT_DARK));
+  else parts.push(boxPart(0.05 * k, 0.15 * k, 0.045 * k, bx + spec.bodyLen * 0.58, Y - 0.11 * k, 0, LOOT_DARK, 0, -0.12));         // magazine
+  if (spec.stock) {
+    parts.push(boxPart(stockLen * k, 0.06 * k, 0.05 * k, sh + stockLen / 2, Y - 0.005 * k, 0, spec.wood ? LOOT_WOOD : LOOT_POLY));
+    if (spec.wood) parts.push(boxPart(spec.bodyLen * 0.55 * k, 0.05 * k, 0.045 * k, bx + spec.bodyLen * 0.3, Y - 0.06 * k, 0, LOOT_WOOD));
+  } else {
+    parts.push(boxPart(0.06 * k, 0.055 * k, 0.055 * k, bx + spec.bodyLen * 0.86, Y + 0.05 * k, 0, LOOT_DARK)); // pistol slide
+  }
+  if (spec.scope) {
+    const sy = Y + (bodyH * 0.5 + 0.05) * k;
+    parts.push(cylPart(0.034 * k, 0.2 * k, bx + spec.bodyLen * 0.45, sy, 0, LOOT_DARK, Math.PI / 2));
+    parts.push(cylPart(0.044 * k, 0.03 * k, bx + spec.bodyLen * 0.45 + 0.1 * k, sy, 0, LOOT_GLASS, Math.PI / 2));
+  }
+  return parts;
+}
+
+/** olive ammo crate with three rifle cartridges sticking out of the top */
+function ammoLootParts(): LootPart[] {
+  const crate = 0x55603f, lid = 0x6a7550, band = 0x3f4a2f, brass = 0xc9a34e, tip = 0x8a6b30;
+  const parts: LootPart[] = [
+    boxPart(0.4, 0.18, 0.26, 0, 0.09, 0, crate),
+    boxPart(0.42, 0.045, 0.28, 0, 0.2, 0, lid),
+    boxPart(0.415, 0.05, 0.05, 0, 0.13, 0, band),
+  ];
+  for (let i = -1; i <= 1; i++) {
+    parts.push(cylPart(0.02, 0.13, i * 0.055, 0.28, 0.04, brass));
+    parts.push(cylPart(0.021, 0.03, i * 0.055, 0.355, 0.04, tip));
+  }
+  return parts;
+}
+
+/** white medkit case with a red cross on the lid */
+function medLootParts(): LootPart[] {
+  const white = 0xe8e4da, red = 0xd84838, latch = 0xb8b4aa;
+  return [
+    boxPart(0.38, 0.2, 0.26, 0, 0.1, 0, white),
+    boxPart(0.39, 0.04, 0.27, 0, 0.19, 0, white),
+    boxPart(0.2, 0.022, 0.055, 0, 0.215, 0, red),
+    boxPart(0.055, 0.022, 0.2, 0, 0.215, 0, red),
+    boxPart(0.1, 0.03, 0.05, 0, 0.225, 0, latch),
+  ];
+}
+
+/** armor vest: torso plate + front plate + shoulders + belt */
+function vestLootParts(): LootPart[] {
+  const base = 0x5c6f7d, plate = 0x42525e, belt = 0x3a464f;
+  return [
+    boxPart(0.34, 0.36, 0.14, 0, 0.18, 0, base),
+    boxPart(0.26, 0.22, 0.05, 0, 0.2, 0.08, plate),
+    boxPart(0.1, 0.06, 0.16, -0.16, 0.38, 0, base),
+    boxPart(0.1, 0.06, 0.16, 0.16, 0.38, 0, base),
+    boxPart(0.36, 0.06, 0.15, 0, 0.06, 0, belt),
+  ];
+}
+
+/** colored glow ring on the ground so loot pops from a distance */
+function haloLootPart(kind: LootKind): LootPart {
+  const gun = kind.startsWith('w');
+  const geo = new THREE.CircleGeometry(gun ? 0.55 : 0.42, 18);
+  const m = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+  m.setPosition(0, gun ? 0.015 : -0.36, 0);
+  return { geo, m, c: LOOT_HALO[kind] };
+}
+
+const lootGeos = new Map<LootKind, THREE.BufferGeometry>();
+let lootMat: THREE.MeshLambertMaterial | null = null;
 
 export function mountGame(container: HTMLElement): () => void {
   injectStyles();
