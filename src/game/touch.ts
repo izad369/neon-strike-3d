@@ -39,8 +39,8 @@ export interface TouchInput {
   consumeReload(): boolean;
   consumeTapFire(): boolean;
   consumeCrouchToggle(): boolean;
-  consumeWeaponCycle(): boolean;
   consumeAimToggle(): boolean;
+  consumeSwap(): boolean;
 }
 
 export interface TouchCallbacks {
@@ -72,7 +72,7 @@ export class TouchControls implements TouchInput {
   private reloadQ = false;
   private tapQ = false;
   private crouchQ = false;
-  private wpnQ = false;
+  private swapQ = false;
   private aimQ = false;
 
   private lookAccX = 0;
@@ -89,11 +89,10 @@ export class TouchControls implements TouchInput {
       <div class="ns-tbtn jump">JUMP</div>
       <div class="ns-tbtn reload">RLD</div>
       <div class="ns-tbtn crouch">CRCH</div>
-      <div class="ns-tbtn wpn">WPN</div>
       <div class="ns-tbtn aim">AIM</div>
       <div class="ns-tbtn sb">LIST</div>
       <div class="ns-tbtn pause">II</div>
-      <div class="ns-rotate-hint ns-hidden"><span class="ns-rotate-icon-sm"></span>ROTATE YOUR PHONE<br /><span>for a natural view — the game already runs landscape</span></div>
+      <div class="ns-tbtn swap ns-hidden">SWAP</div>
     `;
     parent.appendChild(this.root);
     this.moveZone = this.root.querySelector('.ns-zone-move')!;
@@ -116,8 +115,8 @@ export class TouchControls implements TouchInput {
     this.bindHold(this.root.querySelector('.ns-tbtn.jump')!, () => { this.jumpQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.reload')!, () => { this.reloadQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.crouch')!, () => { this.crouchQ = true; }, undefined);
-    this.bindHold(this.root.querySelector('.ns-tbtn.wpn')!, () => { this.wpnQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.aim')!, () => { this.aimQ = true; }, undefined);
+    this.bindHold(this.root.querySelector('.ns-tbtn.swap')!, () => { this.swapQ = true; }, undefined);
     this.bindHold(this.root.querySelector('.ns-tbtn.sb')!, () => this.cb.onScoreboard(true), () => this.cb.onScoreboard(false));
     const pauseBtn = this.root.querySelector('.ns-tbtn.pause')!;
     pauseBtn.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); this.cb.onPause(); }, { passive: false });
@@ -142,14 +141,21 @@ export class TouchControls implements TouchInput {
   private preventDefault = (e: Event) => e.preventDefault();
 
   /**
+   * Active forced-landscape rotation (set by main from screen.orientation.angle
+   * + device tilt). 0 = none, 90 = CSS rotate(90deg), -90 = rotate(-90deg).
+   * Touches must be counter-rotated into game space to avoid inverted controls.
+   */
+  private rotation: 0 | 90 | -90 = 0;
+  setForcedRotation(r: 0 | 90 | -90) { this.rotation = r; }
+
+  /**
    * Map screen (client) coords into the game's element space.
    * When the phone is portrait we render the whole game rotated 90°
-   * (.ns-forced-landscape), so touches must be counter-rotated.
+   * (either direction), so touches must be counter-rotated accordingly.
    */
   private mapXY(cx: number, cy: number): [number, number] {
-    if (this.parent.classList.contains('ns-forced-landscape')) {
-      return [window.innerWidth - cy, cx];
-    }
+    if (this.rotation === 90) return [window.innerWidth - cy, cx];
+    if (this.rotation === -90) return [window.innerHeight - cy, cx];
     return [cx, cy];
   }
 
@@ -252,25 +258,18 @@ export class TouchControls implements TouchInput {
   consumeReload() { const v = this.reloadQ; this.reloadQ = false; return v; }
   consumeTapFire() { const v = this.tapQ; this.tapQ = false; return v; }
   consumeCrouchToggle() { const v = this.crouchQ; this.crouchQ = false; return v; }
-  consumeWeaponCycle() { const v = this.wpnQ; this.wpnQ = false; return v; }
   consumeAimToggle() { const v = this.aimQ; this.aimQ = false; return v; }
+  consumeSwap() { const v = this.swapQ; this.swapQ = false; return v; }
 
   /** reflect the player's aim state on the AIM button (toggle style) */
   setAimActive(v: boolean) {
     this.root.querySelector('.ns-tbtn.aim')?.classList.toggle('on', v);
   }
 
-  // ---------- rotate hint banner (non-blocking) ----------
-  showRotateHint(v: boolean) {
-    const el = this.root.querySelector('.ns-rotate-hint') as HTMLElement | null;
-    if (!el) return;
-    el.classList.toggle('ns-hidden', !v);
-    if (v) {
-      clearTimeout(this.hintTimer);
-      this.hintTimer = setTimeout(() => el.classList.add('ns-hidden'), 3500) as unknown as number;
-    }
+  /** contextual SWAP button (battle royale ground weapon pickup) */
+  showSwap(v: boolean) {
+    this.root.querySelector('.ns-tbtn.swap')?.classList.toggle('ns-hidden', !v);
   }
-  private hintTimer: number | undefined;
 
   // ---------- visibility ----------
   setEnabled(v: boolean) {
@@ -283,7 +282,7 @@ export class TouchControls implements TouchInput {
     this.fwdV = 0; this.strafeV = 0;
     this.fireHeld = false;
     this.jumpQ = false; this.reloadQ = false; this.tapQ = false;
-    this.crouchQ = false; this.wpnQ = false; this.aimQ = false;
+    this.crouchQ = false; this.swapQ = false; this.aimQ = false;
     this.lookAccX = 0; this.lookAccY = 0;
     this.joyEl.style.display = 'none';
     this.fireBtn.classList.remove('on');

@@ -14,7 +14,9 @@ export function injectStyles() {
 .ns-ops { font-family: 'Black Ops One', 'Orbitron', sans-serif; }
 
 /* ---------- HUD ---------- */
-.ns-hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+/* z-index 20: ABOVE the touch layer (15) so tap-to-equip slots receive touches;
+   root stays pointer-events:none so only real widgets (slots) capture */
+.ns-hud { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
 .ns-crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%); }
 .ns-crosshair::before, .ns-crosshair::after {
   content: ''; position: absolute; background: #e8dcb0; box-shadow: 0 0 3px rgba(0,0,0,0.8);
@@ -128,10 +130,17 @@ export function injectStyles() {
 
 /* ---------- Menus ---------- */
 .ns-menu { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  padding: 12px; overflow-y: auto;
   background: radial-gradient(ellipse at 30% 20%, rgba(214,185,106,0.10), transparent 55%),
               radial-gradient(ellipse at 75% 80%, rgba(125,143,78,0.10), transparent 50%),
               rgba(18,15,10,0.94); }
-.ns-menu-inner { width: min(520px, 92vw); max-height: 92vh; overflow-y: auto; padding: 34px 36px; text-align: center; }
+/* max-height:100% (not 92vh!) — vh units ignore the forced-landscape root
+   rotation, which made the menu unscrollable on portrait phones */
+.ns-menu-inner { width: min(520px, 92vw); max-height: 100%; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  padding: 26px 28px 34px; text-align: center; }
+/* touch devices: root blocks touch-action during play — menus must pan vertically */
+.ns-menu, .ns-menu-inner { touch-action: pan-y; }
 .ns-title { font-family: 'Black Ops One', sans-serif; font-weight: 400; font-size: 50px; letter-spacing: 5px; line-height: 1;
   background: linear-gradient(90deg, #e6cfa0, #cdb27a 45%, #9fb86e); -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 2px 3px rgba(0,0,0,0.65)); }
@@ -233,7 +242,7 @@ export function injectStyles() {
 .ns-root.ns-touch-mode .ns-crouch-ind { bottom: auto; top: 66px; }
 .ns-root.ns-touch-mode .ns-hint { display: none; }
 .ns-root.ns-touch-mode .ns-slots { top: 64px; right: 18px; }
-.ns-slot { min-width: 150px; }
+.ns-slot { min-width: 150px; touch-action: none; -webkit-tap-highlight-color: transparent; }
 .ns-root.ns-touch-mode .ns-feed { top: 64px; left: 84px; max-width: 52vw; }
 @media (max-width: 760px) {
   .ns-menu-inner { padding: 22px 18px; }

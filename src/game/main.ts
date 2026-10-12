@@ -126,6 +126,13 @@ class Game {
       this.hud.setWeaponName(spec.name);
       this.hud.toast(`${spec.name}  [${slotIdx + 1}/3]`);
     };
+    // tap/click a weapon slot in the top-right bar -> put that weapon in hand
+    // (was never wired, so tapping a slot silently did nothing on mobile)
+    this.hud.onSlotTap = (slot) => {
+      if (this.state === 'playing' && !this.paused && !this.menus.isVisible()) {
+        this.player.switchSlot(slot);
+      }
+    };
     this.player.onCrouchChange = (c) => this.hud.setCrouchIndicator(c);
     this.player.onAimChange = (a) => this.touch.setAimActive(a);
 

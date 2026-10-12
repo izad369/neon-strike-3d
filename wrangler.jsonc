@@ -1,12 +1,19 @@
-// Cloudflare Workers — static-assets-only config.
+// Cloudflare Workers — game + always-on Discord bot in ONE worker.
 // The deployable game is the PREBUILT single-file bundle in ./dist
 // (dist/index.html). No build step, no Next.js, no OpenNext needed.
 // Workers Builds deploy command:  npx wrangler deploy
+//
+// `main` adds a Worker script for non-asset routes:
+//   /bot/health  -> always-on health check
+//   /bot/discord -> Discord Interactions endpoint (24/7 slash commands)
+// Static assets are served FIRST for matching paths, so the game is untouched.
 {
   "name": "neon-strike-3d",
+  "main": "worker/index.js",
   "compatibility_date": "2026-10-06",
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
   "observability": {
