@@ -108,6 +108,7 @@ class Game {
     this.touch = new TouchControls(root, {
       onPause: () => { if (this.state === 'playing' && !this.paused && !this.menus.isVisible()) this.pauseGame(); },
       onScoreboard: (show) => this.showScoreboard(show),
+      onRotateFlip: () => this.toggleRotFlip(),
     });
     this.menus = new Menus(root, {
       onStartOffline: (name, bots, diff, mode, map, lo) => this.startOffline(name, bots, diff, mode, map, lo),
@@ -251,16 +252,30 @@ class Game {
       if (ang === 180) flip = true;              // upside-down portrait
       else if (ang === 0) flip = this.tiltGamma > 45; // clockwise hold → mirrored rotate
       // ang 90/270 would already be landscape (no forcing)
+      // Manual override (ROT button): embedded webviews (Aippy etc.) have no
+      // device tilt, so the auto direction can be wrong for the user's grip.
+      try {
+        const pref = localStorage.getItem('ns_rot_flip');
+        if (pref === '0' || pref === '1') flip = pref === '1';
+      } catch { /* private mode */ }
     }
     this.root.classList.toggle('ns-forced-landscape', force && !flip);
     this.root.classList.toggle('ns-forced-landscape-flip', force && flip);
     this.touch.setForcedRotation(force ? (flip ? -90 : 90) : 0);
+    this.touch.setRotVisible(force);
     this.world.resize(force ? vh : vw, force ? vw : vh);
   }
 
   private onOrientationChange = () => {
     this.applyLayout();
   };
+
+  /** ROT button (forced landscape): flip which way the picture is rotated, remember it */
+  private toggleRotFlip() {
+    const flipped = this.root.classList.contains('ns-forced-landscape-flip');
+    try { localStorage.setItem('ns_rot_flip', flipped ? '0' : '1'); } catch { /* private mode */ }
+    this.applyLayout();
+  }
 
   /** gamma > 45° means the phone's right edge points DOWN (clockwise hold) */
   private onDeviceTilt = (e: DeviceOrientationEvent) => {

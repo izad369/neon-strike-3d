@@ -261,6 +261,8 @@ export function injectStyles() {
 .ns-tbtn.swap { left: 24px; bottom: 216px; width: 88px; height: 56px; border-radius: 10px; font-size: 13px;
   border-color: #9fb86e; color: #cfe0a4; background: rgba(52,64,32,0.55); }
 .ns-tbtn.sb { left: 22px; top: 66px; width: 52px; height: 40px; border-radius: 8px; font-size: 10px; }
+.ns-tbtn.rot { left: 22px; top: 12px; width: 46px; height: 46px; font-size: 10px; }
+.ns-tbtn.rot.on { border-color: #9fb86e; color: #cfe0a4; }
 .ns-tbtn.pause { left: 50%; margin-left: 86px; top: 12px; width: 46px; height: 46px; font-size: 13px; letter-spacing: 2px; }
 
 /* forced landscape: render the game rotated 90° on portrait phones.

@@ -46,6 +46,8 @@ export interface TouchInput {
 export interface TouchCallbacks {
   onPause(): void;
   onScoreboard(show: boolean): void;
+  /** ROT button: flip which way the forced-landscape picture is rotated */
+  onRotateFlip(): void;
 }
 
 export class TouchControls implements TouchInput {
@@ -55,6 +57,7 @@ export class TouchControls implements TouchInput {
   private fireBtn: HTMLElement;
   private moveZone: HTMLElement;
   private lookZone: HTMLElement;
+  private rotBtn: HTMLElement;
 
   private joyId = -1;
   private joyCX = 0; private joyCY = 0;
@@ -93,6 +96,7 @@ export class TouchControls implements TouchInput {
       <div class="ns-tbtn sb">LIST</div>
       <div class="ns-tbtn pause">II</div>
       <div class="ns-tbtn swap ns-hidden">SWAP</div>
+      <div class="ns-tbtn rot ns-hidden">ROT</div>
     `;
     parent.appendChild(this.root);
     this.moveZone = this.root.querySelector('.ns-zone-move')!;
@@ -120,6 +124,10 @@ export class TouchControls implements TouchInput {
     this.bindHold(this.root.querySelector('.ns-tbtn.sb')!, () => this.cb.onScoreboard(true), () => this.cb.onScoreboard(false));
     const pauseBtn = this.root.querySelector('.ns-tbtn.pause')!;
     pauseBtn.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); this.cb.onPause(); }, { passive: false });
+    // ROT: flip the forced-landscape direction (for webviews/iframes where the
+    // device tilt sensor is unavailable, e.g. games embedded in other apps)
+    this.rotBtn = this.root.querySelector('.ns-tbtn.rot')!;
+    this.rotBtn.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); this.cb.onRotateFlip(); }, { passive: false });
 
     // fire-button drag also aims (PUBG-style): track its own touch id
     this.fireBtn.addEventListener('touchstart', (e) => {
@@ -148,13 +156,23 @@ export class TouchControls implements TouchInput {
   private rotation: 0 | 90 | -90 = 0;
   setForcedRotation(r: 0 | 90 | -90) { this.rotation = r; }
 
+  /** show the ROT flip button only while forced-landscape is active */
+  setRotVisible(v: boolean) { this.rotBtn.classList.toggle('ns-hidden', !v); }
+
   /**
    * Map screen (client) coords into the game's element space.
    * When the phone is portrait we render the whole game rotated 90°
    * (either direction), so touches must be counter-rotated accordingly.
    */
   private mapXY(cx: number, cy: number): [number, number] {
-    if (this.rotation === 90) return [window.innerWidth - cy, cx];
+    // Inverse of the CSS forced-landscape transforms (transform-origin: left top):
+    //   .ns-forced-landscape      = rotate(90deg) translateY(-100%)  -> game = (cy, innerWidth - cx)
+    //   .ns-forced-landscape-flip = translateY(100vh) rotate(-90deg) -> game = (innerHeight - cy, cx)
+    // NOTE: the +90 branch previously reused the -90 formula, which MIRRORED both
+    // axes of every mapped touch (joystick + look) whenever the picture rotated
+    // +90 — the case embedded webviews (Aippy etc.) always hit, because the device
+    // tilt sensor is unavailable there and the default +90 rotation is used.
+    if (this.rotation === 90) return [cy, window.innerWidth - cx];
     if (this.rotation === -90) return [window.innerHeight - cy, cx];
     return [cx, cy];
   }
