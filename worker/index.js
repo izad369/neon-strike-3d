@@ -105,6 +105,17 @@ export default {
     if (url.pathname === '/bot/health') {
       return Response.json({ ok: true, bot: 'DesertStrike3D', mode: 'cloudflare-edge', ts: Date.now() });
     }
+    // Discord Domain Connection verification (profile website link).
+    // Discord fetches this exact URL and must see the challenge token as plain text.
+    if (url.pathname === '/.well-known/discord') {
+      return new Response('dh=4d7044daf1e72a009e541bd119abb799f675fabb', {
+        status: 200,
+        headers: {
+          'content-type': 'text/plain;charset=UTF-8',
+          'cache-control': 'public, max-age=300',
+        },
+      });
+    }
     if (url.pathname === '/bot/discord' && request.method === 'POST') {
       const body = await request.text();
       if (!(await verifySignature(request, body))) {
