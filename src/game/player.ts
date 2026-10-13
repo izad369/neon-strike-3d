@@ -460,7 +460,10 @@ export class LocalPlayer {
 
   /** BR landing protection: still dropping or just touched the ground */
   isAirborneOrLanding(now: number): boolean {
-    return this.parachute || this.pos.y > 3 || (this.landedAt > 0 && now - this.landedAt < CFG.brGraceMs);
+    // flag-based (parachute set on BR spawn, cleared on touchdown) + landing grace.
+    // NOT pos.y>3 — standing on a WARZONE rooftop (5-8 m) used to grant
+    // permanent invulnerability.
+    return this.parachute || (this.landedAt > 0 && now - this.landedAt < CFG.brGraceMs);
   }
 
   private tryShoot(now: number, fired: { fired: boolean }) {

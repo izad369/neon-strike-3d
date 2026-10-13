@@ -748,6 +748,43 @@ export class World {
     return best.clone();
   }
 
+  /**
+   * Rescue a body stuck on a rooftop / elevated platform: find the collider it
+   * is standing on and teleport just past its nearest edge onto open ground.
+   * Used by the bot stuck watchdog (WARZONE roofs used to trap bots forever).
+   * Returns true when the body was moved.
+   */
+  groundEscape(pos: THREE.Vector3): boolean {
+    // collider directly under our feet (top ≈ pos.y, footprint contains pos)
+    let stand: Box | null = null;
+    for (const b of this.colliders) {
+      if (b.max.y < 1.0) continue;                                   // ground-level props: not "elevated"
+      if (pos.y < b.max.y - 0.6 || pos.y > b.max.y + 0.6) continue;  // not our floor
+      if (pos.x < b.min.x - 0.5 || pos.x > b.max.x + 0.5) continue;
+      if (pos.z < b.min.z - 0.5 || pos.z > b.max.z + 0.5) continue;
+      if (!stand || b.max.y > stand.max.y) stand = b;                // highest floor under us
+    }
+    if (!stand) return false;
+    const cx = (stand.min.x + stand.max.x) / 2, cz = (stand.min.z + stand.max.z) / 2;
+    let dx = pos.x - cx, dz = pos.z - cz;
+    if (Math.abs(dx) < 0.01 && Math.abs(dz) < 0.01) { dx = 1; dz = 0; } // dead centre: head east
+    const halfW = (stand.max.x - stand.min.x) / 2, halfD = (stand.max.z - stand.min.z) / 2;
+    const len = Math.max(Math.abs(dx), 0.001);
+    const lenZ = Math.max(Math.abs(dz), 0.001);
+    const t = Math.max((halfW + 1.6) / len, (halfD + 1.6) / lenZ);     // just past the edge
+    const lim = this.arenaSize / 2 - 2;
+    // push outward in steps until the landing spot is clear of every footprint
+    for (let k = 0; k < 8; k++) {
+      const f = t * (1 + k * 0.45);
+      const x = THREE.MathUtils.clamp(pos.x + dx * f, -lim, lim);
+      const z = THREE.MathUtils.clamp(pos.z + dz * f, -lim, lim);
+      const blocked = this.colliders.some(b =>
+        x > b.min.x - 0.5 && x < b.max.x + 0.5 && z > b.min.z - 0.5 && z < b.max.z + 0.5 && b.max.y > 0.6);
+      if (!blocked) { pos.x = x; pos.z = z; pos.y = 0.35; return true; }
+    }
+    return false;
+  }
+
   dispose() {
     this.renderer.dispose();
     this.renderer.domElement.remove();

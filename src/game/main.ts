@@ -505,7 +505,7 @@ class Game {
         if (died) this.afterDamage(this.myId, this.myId, 'THE ZONE', false, true);
       }
       this.bots.forEach((b, id) => {
-        if (!b.alive || b.pos.y > 3) return;
+        if (!b.alive || b.isDropping) return; // zone ignores plane droppers, NOT roof campers
         if (Math.hypot(b.pos.x - z.cx, b.pos.z - z.cz) > z.r) {
           const died = b.takeDamage(dmg, now, b.pos.clone());
           if (died) this.afterDamage(id, id, 'THE ZONE', false, true);
@@ -1055,9 +1055,9 @@ class Game {
       }
       // battle royale: landing protection — can't hurt someone still dropping
       const tBot = this.bots.get(targetId);
-      if (tBot && tBot.pos.y > 3) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
+      if (tBot && tBot.isDropping) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
       const tRp = this.remotes.get(targetId);
-      if (tRp && tRp.group.position.y > 3) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
+      if (tRp && tRp.group.position.y > 10) { this.fx.sparks(hit.point, 0x8a8f70, 4); return; }
       this.fx.sparks(hit.point, 0xb03226, 6);
       this.audio.hit();
       this.hud.hitmarker(!!hit.headshot);
@@ -1473,19 +1473,20 @@ class Game {
     // bots (offline & host)
     if (this.mode !== 'client') {
       const targets: BotTarget[] = [
-        { id: this.myId, pos: this.player.pos, alive: this.player.alive, isLocal: true, team: this.teams.get(this.myId) ?? -1 },
+        { id: this.myId, pos: this.player.pos, alive: this.player.alive, isLocal: true, team: this.teams.get(this.myId) ?? -1,
+          dropping: this.gameMode === 'br' && this.player.isAirborneOrLanding(now) },
       ];
-      this.remotes.forEach((rp, id) => targets.push({ id, pos: rp.group.position, alive: rp.alive, isLocal: false, team: this.teams.get(id) ?? -1 }));
+      this.remotes.forEach((rp, id) => targets.push({ id, pos: rp.group.position, alive: rp.alive, isLocal: false, team: this.teams.get(id) ?? -1, dropping: rp.group.position.y > 10 }));
       // team modes: bots also fight each other -> include bots as targets
       if (this.gameMode === 'tdm' || this.gameMode === 'br') {
-        this.bots.forEach((b, id) => targets.push({ id, pos: b.pos, alive: b.alive, isLocal: false, team: b.team }));
+        this.bots.forEach((b, id) => targets.push({ id, pos: b.pos, alive: b.alive, isLocal: false, team: b.team, dropping: b.isDropping }));
       }
       const zoneArg = this.gameMode === 'br' && this.brZone
         ? { cx: this.brZone.cx, cz: this.brZone.cz, r: this.brZone.r, phase: this.brZone.phase }
         : undefined;
       this.bots.forEach(b => b.update(dt, now, targets, zoneArg));
       // soft separation so bots never pile up / get stuck inside each other
-      const alive = [...this.bots.values()].filter(b => b.alive && b.pos.y <= 3);
+      const alive = [...this.bots.values()].filter(b => b.alive && !b.isDropping);
       for (let i = 0; i < alive.length; i++) {
         for (let j = i + 1; j < alive.length; j++) {
           const a = alive[i], c = alive[j];

@@ -41,7 +41,10 @@ export class Menus {
   constructor(private root: HTMLElement, private cb: MenuCallbacks) {
     this.wrap = document.createElement('div');
     this.wrap.className = 'ns-menu ns-hidden';
-    root.appendChild(this.wrap);
+    // Attach to <body>, NOT the game root: the game root gets CSS-rotated 90°
+    // on portrait phones (forced landscape) — the menu must stay upright and
+    // adapt to the physical orientation (portrait menu on a portrait phone).
+    document.body.appendChild(this.wrap);
     this.buildMain();
     this.buildOffline();
     this.buildOnline();
@@ -49,6 +52,7 @@ export class Menus {
     this.buildPause();
     this.buildEnd();
     this.buildHelp();
+    this.buildScrollNav();
   }
 
   private el(html: string): HTMLDivElement {
@@ -436,11 +440,79 @@ export class Menus {
   saveName() { localStorage.setItem('ns_name', this.playerName()); }
 
   show(panel: MenuPanel | null) {
-    if (panel === null) { this.wrap.classList.add('ns-hidden'); return; }
+    if (panel === null) { this.wrap.classList.add('ns-hidden'); this.stopScrollRepeat(); return; }
     this.wrap.classList.remove('ns-hidden');
     Object.entries(this.panels).forEach(([k, el]) => el.classList.toggle('ns-hidden', k !== panel));
+    this.updateScrollNav();
   }
   isVisible(): boolean { return !this.wrap.classList.contains('ns-hidden'); }
+
+  // ---- side scroll buttons (up / down) for tall menus ----
+  private scrollNav!: HTMLElement;
+  private scrollBtnUp!: HTMLButtonElement;
+  private scrollBtnDown!: HTMLButtonElement;
+  private scrollTimer: number | null = null;
+
+  /** two big touch buttons fixed beside the panel: hold to scroll the active panel */
+  private buildScrollNav() {
+    this.scrollNav = this.el(`<div class="ns-scroll-nav ns-hidden">
+      <button class="ns-scroll-btn" data-dir="-1" aria-label="Scroll up">&#9650;</button>
+      <button class="ns-scroll-btn" data-dir="1" aria-label="Scroll down">&#9660;</button>
+    </div>`);
+    this.scrollBtnUp = this.scrollNav.querySelector('[data-dir="-1"]') as HTMLButtonElement;
+    this.scrollBtnDown = this.scrollNav.querySelector('[data-dir="1"]') as HTMLButtonElement;
+    [this.scrollBtnUp, this.scrollBtnDown].forEach(btn => {
+      const dir = parseInt(btn.dataset.dir!, 10);
+      const start = (e: Event) => {
+        e.preventDefault();
+        this.scrollPanel(dir);
+        this.stopScrollRepeat();
+        this.scrollTimer = window.setInterval(() => this.scrollPanel(dir), 110);
+      };
+      const stop = () => this.stopScrollRepeat();
+      btn.addEventListener('pointerdown', start);
+      btn.addEventListener('pointerup', stop);
+      btn.addEventListener('pointercancel', stop);
+      btn.addEventListener('pointerleave', stop);
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+    this.wrap.appendChild(this.scrollNav);
+    // refresh button visibility when the layout / panel content changes
+    const check = () => this.updateScrollNav();
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', check);
+    this.wrap.addEventListener('scroll', check, true);
+    try {
+      new MutationObserver(check).observe(this.wrap, { childList: true, subtree: true, attributes: true });
+    } catch { /* ancient browser — resize/scroll checks still work */ }
+  }
+
+  private activePanel(): HTMLElement | null {
+    for (const el of Object.values(this.panels)) if (!el.classList.contains('ns-hidden')) return el;
+    return null;
+  }
+
+  private scrollPanel(dir: number) {
+    const p = this.activePanel();
+    if (!p) return;
+    const step = Math.max(110, p.clientHeight * 0.26);
+    p.scrollBy({ top: dir * step, behavior: 'auto' });
+  }
+
+  private stopScrollRepeat() {
+    if (this.scrollTimer !== null) { clearInterval(this.scrollTimer); this.scrollTimer = null; }
+  }
+
+  /** show the arrows only when the active panel really overflows */
+  private updateScrollNav() {
+    const p = this.activePanel();
+    if (!p || this.wrap.classList.contains('ns-hidden')) { this.scrollNav.classList.add('ns-hidden'); return; }
+    const over = p.scrollHeight > p.clientHeight + 8;
+    this.scrollNav.classList.toggle('ns-hidden', !over);
+    this.wrap.classList.toggle('ns-nav-reserve', over);
+    this.scrollBtnUp.classList.toggle('ns-disabled', p.scrollTop <= 2);
+    this.scrollBtnDown.classList.toggle('ns-disabled', p.scrollTop + p.clientHeight >= p.scrollHeight - 2);
+  }
 
   setStatus(text: string, err = false) {
     this.statusEl.textContent = text;

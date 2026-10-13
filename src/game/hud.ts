@@ -3,7 +3,7 @@ export function injectStyles() {
   const css = `
 @import url('https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap');
 
-.ns-root, .ns-root * { box-sizing: border-box; margin: 0; padding: 0; }
+.ns-root, .ns-root *, .ns-menu, .ns-menu *, .ns-scroll-nav, .ns-scroll-nav * { box-sizing: border-box; margin: 0; padding: 0; }
 .ns-root {
   position: fixed; inset: 0; overflow: hidden; background: #171410;
   font-family: 'Rajdhani', 'Segoe UI', Arial, sans-serif; color: #efe8d4;
@@ -129,18 +129,26 @@ export function injectStyles() {
 .ns-hud.scoped .ns-scope-line { background: rgba(10,8,4,0.9); box-shadow: 0 0 2px rgba(230,195,92,0.5); }
 
 /* ---------- Menus ---------- */
-.ns-menu { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+/* The menu layer is attached to <body>, OUTSIDE .ns-root, so it NEVER follows
+   the forced-landscape rotation: on a portrait phone the menu stays upright
+   (portrait layout) while the game keeps rendering rotated landscape. */
+.ns-menu { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
   padding: 12px; overflow-y: auto;
+  font-family: 'Rajdhani', 'Segoe UI', Arial, sans-serif; color: #efe8d4;
   background: radial-gradient(ellipse at 30% 20%, rgba(214,185,106,0.10), transparent 55%),
               radial-gradient(ellipse at 75% 80%, rgba(125,143,78,0.10), transparent 50%),
               rgba(18,15,10,0.94); }
 /* max-height:100% (not 92vh!) — vh units ignore the forced-landscape root
-   rotation, which made the menu unscrollable on portrait phones */
-.ns-menu-inner { width: min(520px, 92vw); max-height: 100%; overflow-y: auto;
+   rotation, which made the menu unscrollable on portrait phones.
+   margin:auto (not flex centering alone) keeps the TOP reachable when the
+   panel is taller than the screen. */
+.ns-menu-inner { width: min(520px, 92vw); max-height: 100%; overflow-y: auto; margin: auto;
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
   padding: 26px 28px 34px; text-align: center; }
 /* touch devices: root blocks touch-action during play — menus must pan vertically */
 .ns-menu, .ns-menu-inner { touch-action: pan-y; }
+/* reserve room beside the panel for the scroll arrows (only while they show) */
+.ns-menu.ns-nav-reserve { padding-right: 78px; }
 .ns-title { font-family: 'Black Ops One', sans-serif; font-weight: 400; font-size: 50px; letter-spacing: 5px; line-height: 1;
   background: linear-gradient(90deg, #e6cfa0, #cdb27a 45%, #9fb86e); -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 2px 3px rgba(0,0,0,0.65)); }
@@ -182,6 +190,17 @@ export function injectStyles() {
 .ns-end-sub { color: #a08f6f; letter-spacing: 3px; font-size: 13px; margin-bottom: 18px; text-transform: uppercase; }
 .ns-lobby-tag { font-size: 14px; color: #b3a37f; margin-top: 8px; min-height: 20px; }
 .ns-foot { margin-top: 22px; font-size: 11px; letter-spacing: 2px; color: #6b5f45; }
+
+/* side scroll arrows (up/down) — hold to scroll the active menu panel */
+.ns-scroll-nav { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); z-index: 910;
+  display: flex; flex-direction: column; gap: 12px; }
+.ns-scroll-btn { width: 58px; height: 76px; border-radius: 12px; font-size: 24px; line-height: 1;
+  color: #e6cfa0; background: rgba(38,32,22,0.92); border: 1px solid #b3a077; cursor: pointer;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent; transition: all 0.12s; }
+.ns-scroll-btn:active { background: rgba(214,185,106,0.28); box-shadow: 0 0 14px rgba(214,185,106,0.4); }
+.ns-scroll-btn.ns-disabled { opacity: 0.3; }
 .ns-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 5;
   font-family: 'Black Ops One', sans-serif; letter-spacing: 4px; color: #cdb27a; font-size: 18px; }
 

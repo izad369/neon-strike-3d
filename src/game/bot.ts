@@ -11,6 +11,7 @@ export interface BotTarget {
   alive: boolean;
   isLocal: boolean;
   team: number; // -1 = no teams (DM), 0/1 = TDM
+  dropping?: boolean; // BR plane drop in progress (not targetable)
 }
 
 export interface BotShot {
@@ -66,6 +67,9 @@ export class Bot {
   private zone: ZoneInfo | null = null;        // BR safe zone (set per update)
   private lastPos = new THREE.Vector3();       // stuck watchdog
   private stuckCheckAt = 0;
+  private elevatedStuck = 0;                   // consecutive stuck ticks while elevated
+  private dropping = false;                    // BR plane drop in progress (physics only)
+  get isDropping(): boolean { return this.dropping; }
   get shooting(): boolean { return performance.now() - this.lastShotAt < 160; }
   private diff: typeof DIFFICULTY[Difficulty];
 
@@ -93,6 +97,8 @@ export class Bot {
     this.state = 'patrol';
     this.lastSeen = null;
     this.stuckCheckAt = 0;
+    this.elevatedStuck = 0;
+    this.dropping = p.y > 3; // BR plane drop spawns high; regular spawns are ground level
     this.group.visible = true;
     this.audio.spawnFx();
   }
@@ -145,13 +151,17 @@ export class Bot {
     }
     this.zone = zone ?? null;
 
-    // --- airborne (BR plane drop): physics only, no AI until landed ---
-    if (this.pos.y > 3) {
+    // --- airborne (BR plane drop): physics only, no AI until landed.
+    // FLAG-based, not pos.y>3: WARZONE rooftops are 5-8 m tall, so a bot that
+    // landed on one used to stay in this branch FOREVER — velocity zeroed every
+    // frame, no AI, no shooting: the "frozen bots on roofs" bug.
+    if (this.dropping) {
       this.vel.x = 0; this.vel.z = 0;
       this.vel.y -= CFG.gravity * dt;
       if (this.pos.y < 55 && this.vel.y < -12) this.vel.y = -12; // soft chute
-      this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, CFG.playerHeight);
+      const res = this.world.moveBody(this.pos, this.vel, dt, CFG.playerRadius, CFG.playerHeight);
       this.group.position.copy(this.pos);
+      if (res.grounded) this.dropping = false; // landed — on the ground OR a rooftop
       return;
     }
 
@@ -172,14 +182,25 @@ export class Bot {
           const d = Math.hypot(dx, dz), maxR = Math.max(2, this.zone.r - 5);
           if (d > maxR) this.targetPoint.set(this.zone.cx + (dx / d) * maxR, this.pos.y, this.zone.cz + (dz / d) * maxR);
         }
-        // elevated (roof / watchtower platform): hop the railing and keep walking
-        // until it drops — bots are on the ground floor 95% of the time anyway
+        // elevated (roof / watchtower platform): hop + steer to a random point
+        // until the edge drops us off; after ~3 trapped seconds, hard-rescue
         if (this.pos.y > 1.2) {
-          this.vel.y = CFG.jumpVel;
-          // steer away from the highest nearby collider (walk off the edge)
-          const esc = new THREE.Vector3(Math.cos(Math.random() * Math.PI * 2), 0, Math.sin(Math.random() * Math.PI * 2));
-          this.targetPoint.set(this.pos.x + esc.x * 14, 0, this.pos.z + esc.z * 14);
-        }
+          this.elevatedStuck++;
+          if (this.elevatedStuck >= 3 && this.world.groundEscape(this.pos)) {
+            this.vel.set(0, 0, 0);
+            this.elevatedStuck = 0;
+          } else {
+            this.vel.y = CFG.jumpVel;
+            // steer away in a random direction (walk off the edge)
+            const esc = new THREE.Vector3(Math.cos(Math.random() * Math.PI * 2), 0, Math.sin(Math.random() * Math.PI * 2));
+            this.targetPoint.set(this.pos.x + esc.x * 14, 0, this.pos.z + esc.z * 14);
+            if (this.zone) {
+              const dx = this.targetPoint.x - this.zone.cx, dz = this.targetPoint.z - this.zone.cz;
+              const d = Math.hypot(dx, dz), maxR = Math.max(2, this.zone.r - 5);
+              if (d > maxR) this.targetPoint.set(this.zone.cx + (dx / d) * maxR, 0, this.zone.cz + (dz / d) * maxR);
+            }
+          }
+        } else this.elevatedStuck = 0;
       }
       this.lastPos.copy(this.pos);
       this.stuckCheckAt = now + 850 + Math.random() * 350;
@@ -277,7 +298,7 @@ export class Bot {
       if (!t.alive) continue;
       if (t.id === this.id) continue; // never target self
       if (this.team !== -1 && t.team === this.team) continue; // team mode: enemies only
-      if (t.pos.y > 3) continue; // still dropping from the plane (BR)
+      if (t.dropping) continue; // still dropping from the plane (BR)
       const d = this.pos.distanceTo(t.pos);
       if (d > this.diff.vision) continue;
       // vision cone: target must be roughly in front (very close = peripheral hearing)
