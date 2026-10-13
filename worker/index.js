@@ -125,6 +125,10 @@ export default {
       try { parsed = JSON.parse(body); } catch { return new Response('bad json', { status: 400 }); }
       return handleInteraction(parsed);
     }
+    // short link: latest Android APK (always points at the newest release asset)
+    if (url.pathname === '/apk' && request.method === 'GET') {
+      return Response.redirect(APK_URL, 302);
+    }
     // everything else: serve the game (assets binding, SPA fallback)
     return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);
   },
