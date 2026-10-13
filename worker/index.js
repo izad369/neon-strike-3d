@@ -13,13 +13,13 @@
 
 const APP_PUBLIC_KEY = '8f16f09b4df7780805d4f0feb7543bdbd4dbc115ed18211a5c7d867691899a95';
 
-const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.4/DesertStrike3D-v3.4.apk';
+const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.5/DesertStrike3D-v3.5.apk';
 const GAME_URL = 'https://neon-strike-3d.rezaei-reza1092.workers.dev/';
 
 const HELP_TEXT = [
   '**DESERT STRIKE 3D** — command list',
   '\u2022 `/ping` \u2014 check I am alive',
-  '\u2022 `/apk` \u2014 latest Android APK (v3.4)',
+  '\u2022 `/apk` \u2014 latest Android APK (v3.5)',
   '\u2022 `/ask <question>` \u2014 ask about the game (edge edition)',
   '\u2022 `/help` \u2014 this list',
   '',
@@ -28,12 +28,12 @@ const HELP_TEXT = [
 ].join('\n');
 
 const APK_TEXT = [
-  '\uD83D\uDD25 **DESERT STRIKE 3D v3.4** \u2014 Android APK:',
+  '\uD83D\uDD25 **DESERT STRIKE 3D v3.5** \u2014 Android APK:',
   APK_URL,
   '',
   'Install: download \u2192 allow "install unknown apps" \u2192 open the APK.',
   'Same signing key as v3.0/v3.1 \u2014 installs directly over them.',
-  'v3.4: START button on portrait phones is now ALWAYS visible & tappable (sticky) \u2014 no more frozen menu \u2022 v3.3: Duel death-screen no longer gets stuck (rounds reset properly) \u2022 Career & Stats screen \u2014 every finished match + your name recorded on-device \u2022 v3.2: shaped BR loot, smart pickups \u2022 v3.0/v3.1: 17 weapons, 3-slot loadout, Battle Royale (limited ammo, zone, plane drop), Duel 1v1, no friendly fire, tap weapon bar, forced landscape.',
+  'v3.5: inverted joystick fixed in embedded apps (Aippy) + new ROT flip button \u2022 v3.4: START button on portrait phones always visible & tappable (sticky) \u2022 v3.3: Duel death-screen rounds reset properly \u2022 Career & Stats screen \u2014 every finished match + your name recorded on-device \u2022 v3.2: shaped BR loot, smart pickups \u2022 v3.0/v3.1: 17 weapons, 3-slot loadout, Battle Royale (limited ammo, zone, plane drop), Duel 1v1, no friendly fire, tap weapon bar, forced landscape.',
 ].join('\n');
 
 // Tiny on-edge knowledge base for /ask (the big LLM brain lives on the dev node)
