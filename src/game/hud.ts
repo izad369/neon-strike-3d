@@ -155,10 +155,22 @@ export function injectStyles() {
 .ns-subtitle { font-size: 15px; letter-spacing: 6px; color: #a08f6f; margin: 8px 0 26px; text-transform: uppercase; }
 .ns-btn { display: block; width: 100%; margin: 10px 0; padding: 13px 18px; font-family: 'Black Ops One', sans-serif; font-size: 14px;
   font-weight: 400; letter-spacing: 2px; color: #efe8d4; background: rgba(38,32,22,0.92); border: 1px solid #6b5d43;
-  border-radius: 6px; cursor: pointer; transition: all 0.15s; text-transform: uppercase; }
+  border-radius: 6px; cursor: pointer; transition: all 0.15s; text-transform: uppercase; touch-action: manipulation; }
 .ns-btn:hover { border-color: #d6b96a; color: #e6cfa0; box-shadow: 0 0 14px rgba(214,185,106,0.25); transform: translateY(-1px); }
 .ns-btn:disabled { opacity: 0.45; cursor: wait; }
 .ns-btn.primary { background: linear-gradient(90deg, rgba(214,185,106,0.16), rgba(125,143,78,0.16)); border-color: #b3a077; }
+/* Primary CTAs (Start Match / Create Match) must NEVER be clipped by a tall panel:
+   sticky pins them fully visible & tappable at the bottom of the panel scroll area
+   in every orientation. On portrait phones the offline panel is taller than the
+   screen and Start Match used to sit half off-screen at y>100% -> taps landed
+   nowhere -> the game looked frozen on the menu. Opaque bg keeps it readable
+   while panel content scrolls underneath. */
+.ns-btn.ns-cta { position: sticky; bottom: 10px; z-index: 6;
+  background: linear-gradient(90deg, #2b2517, #26301a); box-shadow: 0 6px 20px rgba(0,0,0,0.6); }
+/* same guarantee for CTAs that live inside a row wrapper (sticky needs the
+   scrolling parent; the row is the direct child of the panel scroller) */
+.ns-row.ns-cta-row { position: sticky; bottom: 10px; z-index: 6; }
+.ns-row.ns-cta-row .ns-btn { background: linear-gradient(90deg, #2b2517, #26301a); box-shadow: 0 6px 20px rgba(0,0,0,0.6); }
 .ns-btn.danger:hover { border-color: #d24a35; color: #d24a35; box-shadow: 0 0 14px rgba(210,74,53,0.3); }
 .ns-btn.small { font-size: 12px; padding: 9px 12px; }
 .ns-field { margin: 14px 0; text-align: left; }

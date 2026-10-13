@@ -180,7 +180,7 @@ export class Menus {
       <div class="ns-field ns-bots-field"><label>Bots</label></div>
       <div class="ns-bots-slot"></div>
       <div class="ns-mode-desc"></div>
-      <button class="ns-btn primary ns-go">Start Match</button>
+      <button class="ns-btn primary ns-cta ns-go">Start Match</button>
       <button class="ns-btn small ns-back">Back</button>
     </div>`);
     const modeSeg = this.el(`<div class="ns-seg ns-mode-seg">
@@ -246,9 +246,20 @@ export class Menus {
     loadSlot.appendChild(loadWrap);
     applyMode('dm');
     p.querySelector('.ns-go')!.addEventListener('click', () => {
-      const bots = this.mode === 'dm' || this.mode === 'tdm' ? (this.currentBots?.get() ?? 5) : 0;
-      this.offlineBots = bots;
-      this.cb.onStartOffline(this.playerName(), bots, this.diff, this.mode, this.mode === 'br' ? 'outpost' : ms.get(), this.readLoadout(this.offLoadoutSels));
+      // Instant feedback + next-tick start: on phones the map build is heavy work;
+      // acknowledging the tap immediately makes the start feel alive and a
+      // double-tap can never fire two matches.
+      const go = p.querySelector('.ns-go') as HTMLButtonElement;
+      if (go.disabled) return; // double-tap guard
+      go.disabled = true;
+      this.setStatus('BUILDING MAP…');
+      setTimeout(() => {
+        try {
+          const bots = this.mode === 'dm' || this.mode === 'tdm' ? (this.currentBots?.get() ?? 5) : 0;
+          this.offlineBots = bots;
+          this.cb.onStartOffline(this.playerName(), bots, this.diff, this.mode, this.mode === 'br' ? 'outpost' : ms.get(), this.readLoadout(this.offLoadoutSels));
+        } finally { go.disabled = false; }
+      }, 50);
     });
     p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
     this.addPanel('offline', p);
@@ -266,7 +277,7 @@ export class Menus {
       <div class="ns-hostmap-slot"></div>
       <div class="ns-field ns-hostload-field"><label>Host loadout (applies to everyone)</label></div>
       <div class="ns-hostload-slot"></div>
-      <button class="ns-btn primary ns-host">Create Match (get code)</button>
+      <button class="ns-btn primary ns-cta ns-host">Create Match (get code)</button>
       <div class="ns-field" style="margin-top:22px"><label>Or join with room code</label>
         <div class="ns-row"><input class="ns-input ns-code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase; letter-spacing:6px; text-align:center" /></div>
       </div>
@@ -324,8 +335,8 @@ export class Menus {
       <div class="ns-code-box ns-lobby-code">-----</div>
       <div class="ns-lobby-players" style="font-size:17px; color:#bfe9ff">1 player connected</div>
       <div class="ns-lobby-note ns-lobby-tag"></div>
-      <div class="ns-row" style="margin-top:16px">
-        <button class="ns-btn primary ns-start">Start Match</button>
+      <div class="ns-row ns-cta-row" style="margin-top:16px">
+        <button class="ns-btn primary ns-cta ns-start">Start Match</button>
       </div>
       <button class="ns-btn small danger ns-leave">Leave lobby</button>
     </div>`);
