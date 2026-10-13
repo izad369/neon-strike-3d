@@ -184,6 +184,18 @@ export function injectStyles() {
 .ns-help b { color: #cdb27a; }
 .ns-help .k { display: inline-block; min-width: 26px; text-align: center; background: #3a3223; border: 1px solid #6b5d43;
   border-bottom-width: 3px; border-radius: 4px; padding: 0 7px; font-weight: 700; color: #f2ecd8; font-size: 13px; }
+/* career & stats screen */
+.ns-career-name { color: #cdb27a; font-weight: 700; letter-spacing: 3px; }
+.ns-career-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 12px 0 4px; }
+.ns-career-cell { background: rgba(30,26,18,0.75); border: 1px solid #55492f; border-radius: 6px; padding: 8px 4px; text-align: center; }
+.ns-career-cell span { display: block; font-size: 10px; letter-spacing: 1px; color: #a08f6f; text-transform: uppercase; }
+.ns-career-cell b { display: block; font-size: 17px; color: #f2ecd8; margin-top: 2px; }
+.ns-career-hint { font-size: 12px; color: #a08f6f; margin: 8px 0 10px; line-height: 1.5; }
+.ns-career-list { text-align: left; }
+.ns-career-list .ns-sb-row small { display: block; font-size: 10px; color: #93866a; letter-spacing: 0.5px; }
+.ns-career-empty { font-size: 14px; color: #a08f6f; padding: 14px 6px; text-align: center; }
+.ns-res-win { color: #9fb86e; font-weight: 700; }
+.ns-res-lose { color: #d8836e; font-weight: 700; }
 .ns-end-title { font-family: 'Black Ops One', sans-serif; font-size: 40px; letter-spacing: 5px; margin-bottom: 2px; }
 .ns-end-title.win { color: #9fb86e; text-shadow: 0 0 20px rgba(159,184,110,0.5); }
 .ns-end-title.lose { color: #e08a2e; text-shadow: 0 0 20px rgba(224,138,46,0.45); }

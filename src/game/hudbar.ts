@@ -185,8 +185,9 @@ export class HUD {
     this.respawnEl.classList.toggle('ns-hidden', !show);
     if (!show) return;
     this.respawnLabelEl.textContent = label ?? 'Respawning in';
-    if (!label) this.respawnCountEl.textContent = String(Math.ceil(seconds));
-    else this.respawnCountEl.textContent = '';
+    // countdown shows for any timed overlay (duel's NEXT ROUND IN included);
+    // untimed screens (ELIMINATED etc.) pass seconds=0 and get no number
+    this.respawnCountEl.textContent = seconds > 0 ? String(Math.ceil(seconds)) : '';
   }
 
   /** flashing OUTSIDE ZONE banner (battle royale) */

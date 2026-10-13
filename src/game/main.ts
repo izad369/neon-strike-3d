@@ -18,6 +18,7 @@ import { loadSoldier } from './assets';
 import { playerColor } from './avatar';
 import { WEAPONS, GUN_GAME_LADDER, BR_LOOT_GUNS, WeaponSpec } from './weapons';
 import { Loadout } from './menus';
+import { recordMatch, saveCareerName } from './stats';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -191,6 +192,7 @@ class Game {
     this.scores.set(this.myId, { k: 0, d: 0 });
     this.names.set(this.myId, name);
     this.menus.saveName();
+    saveCareerName(name); // keep the CAREER screen's name in sync (APK-safe storage)
     this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
     this.player.sensitivity = parseInt(this.menus.sensSlider.value, 10) / 100 || 1;
   }
@@ -1003,6 +1005,17 @@ class Game {
         this.touch.setEnabled(false);
         this.hud.show(false);
         this.audio.matchEnd();
+        try {
+          // record the match on the client too (career stats work online)
+          const sorted = [...msg.board].sort((a, b) => b[2] - a[2]);
+          const rank = Math.max(1, sorted.findIndex(r => r[0] === this.myId) + 1);
+          const row = sorted.find(r => r[0] === this.myId);
+          const won = !!row && sorted[0][0] === this.myId;
+          const info = this.gameMode === 'gun'
+            ? `${Math.min(row?.[2] ?? 0, GUN_GAME_LADDER.length)}/${GUN_GAME_LADDER.length} GUNS — RANK #${rank}`
+            : `RANK #${rank}`;
+          recordMatch(this.names.get(this.myId) ?? 'YOU', this.gameMode, row?.[2] ?? 0, row?.[3] ?? 0, won, info);
+        } catch { /* stats must never break the game */ }
         this.menus.showEnd(msg.board, this.myId, false);
       }
     }
@@ -1301,6 +1314,14 @@ class Game {
 
   private offlineBotCount = 5;
 
+  /** persist this finished match into the on-device CAREER stats (never throws) */
+  private recordCareer(won: boolean, info: string) {
+    try {
+      const s = this.scores.get(this.myId) ?? { k: 0, d: 0 };
+      recordMatch(this.names.get(this.myId) ?? 'YOU', this.gameMode, s.k, s.d, won, info);
+    } catch { /* stats must never break the game */ }
+  }
+
   private endMatch() {
     if (this.state === 'end') return;
     const board: [string, string, number, number][] = [];
@@ -1317,23 +1338,36 @@ class Game {
     this.audio.matchEnd();
     if (this.mode === 'offline' && this.gameMode === 'survival') {
       const k = this.scores.get(this.myId)?.k ?? 0;
+      this.recordCareer(false, `WAVE ${Math.max(1, this.survWave)} — ${k} KILLS`);
       this.menus.showSurvivalEnd(Math.max(1, this.survWave), k, this.names.get(this.myId) ?? 'YOU');
       return;
     }
     if (this.gameMode === 'br') {
       const won = this.mode !== 'client' && this.brAliveEnemies() === 0 && this.brAliveAllies() > 0;
       const k = this.scores.get(this.myId)?.k ?? 0;
-      this.menus.showBrEnd(won, k, won ? 1 : this.brPlacement(), this.names.get(this.myId) ?? 'YOU');
+      const place = won ? 1 : this.brPlacement();
+      this.recordCareer(won, `#${place} OF 5 — ${k} KILLS`);
+      this.menus.showBrEnd(won, k, place, this.names.get(this.myId) ?? 'YOU');
       return;
     }
     if (this.mode === 'offline' && this.gameMode === 'duel') {
-      this.menus.showDuelEnd(this.duelScore[0] >= CFG.duelRounds, this.duelScore[0], this.duelScore[1]);
+      const won = this.duelScore[0] >= CFG.duelRounds;
+      this.recordCareer(won, `ROUNDS ${this.duelScore[0]}-${this.duelScore[1]}`);
+      this.menus.showDuelEnd(won, this.duelScore[0], this.duelScore[1]);
       return;
     }
     if (this.mode === 'offline' && this.gameMode === 'tdm') {
       const [a, b] = this.teamKillTotals();
+      this.recordCareer(a >= b, `ALLIES ${a} — ${b} ENEMY`);
       this.menus.showTeamEnd(a, b, this.names.get(this.myId) ?? 'YOU', a >= b);
       return;
+    }
+    const rank = Math.max(1, board.findIndex(r => r[0] === this.myId) + 1);
+    if (this.gameMode === 'gun') {
+      const k = this.scores.get(this.myId)?.k ?? 0;
+      this.recordCareer(k >= GUN_GAME_LADDER.length, `${Math.min(k, GUN_GAME_LADDER.length)}/${GUN_GAME_LADDER.length} GUNS — RANK #${rank}`);
+    } else {
+      this.recordCareer(rank === 1, `RANK #${rank}`);
     }
     this.host?.broadcast({ t: 'ev', k: 'end', board } as HostMsg);
     this.menus.showEnd(board, this.myId, this.mode !== 'client');
@@ -1525,13 +1559,22 @@ class Game {
         this.checkBREnd(now);
       }
       // duel: next round respawn
-      if (this.mode === 'offline' && this.gameMode === 'duel' && this.duelWaitUntil > 0 && now >= this.duelWaitUntil) {
-        this.duelWaitUntil = 0;
-        this.duelRound++;
-        this.player.spawnAt(this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]));
-        const bot = [...this.bots.values()][0];
-        if (bot) bot.spawnAt(this.world.pickSpawn([this.player.pos]));
-        this.hud.toast(`ROUND ${this.duelRound}`, 1400);
+      if (this.mode === 'offline' && this.gameMode === 'duel' && this.duelWaitUntil > 0) {
+        const remain = (this.duelWaitUntil - now) / 1000;
+        // keep the NEXT ROUND IN overlay's countdown alive while the player is dead
+        if (!this.player.alive) this.hud.showRespawn(remain > 0, Math.max(0, remain), 'NEXT ROUND IN');
+        if (now >= this.duelWaitUntil) {
+          this.duelWaitUntil = 0;
+          this.duelRound++;
+          const p = this.world.pickSpawn([new THREE.Vector3(0, 0, 0)]);
+          const bot = [...this.bots.values()][0];
+          if (bot) bot.spawnAt(this.world.pickSpawn([p]));
+          // respawnLocal (not just spawnAt): revives the player AND hides the
+          // YOU DIED overlay + re-enables touch controls — the overlay used to
+          // stay on screen forever after dying in duel (stuck-death-screen bug)
+          this.respawnLocal(p);
+          this.hud.toast(`ROUND ${this.duelRound}`, 1400);
+        }
       }
     } else if (this.gameMode === 'br' && this.zoneSync && this.player.alive) {
       // client: self-applied zone damage from the synced zone
@@ -1862,7 +1905,7 @@ export function mountGame(container: HTMLElement): () => void {
   root.className = 'ns-root';
   container.appendChild(root);
   const game = new Game(root);
-  // debug handle for automated testing only (opt-in via ?debug=1)
+// debug handle for automated testing only (opt-in via ?debug=1)
   if (typeof location !== 'undefined' && location.search.includes('debug=1')) {
     (globalThis as unknown as { __NS_DEBUG__?: unknown }).__NS_DEBUG__ = game;
   }

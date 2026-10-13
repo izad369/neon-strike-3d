@@ -3,8 +3,9 @@ import { Difficulty, GameMode, MapId } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
 import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE, DEFAULT_PRIMARY, DEFAULT_BACKUP } from './weapons';
+import { loadCareer, modeLabel, fmtWhen, clearCareerStats, type Career } from './stats';
 
-export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help';
+export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help' | 'career';
 
 export interface Loadout { knife: number; primary: number; backup: number }
 
@@ -52,6 +53,7 @@ export class Menus {
     this.buildPause();
     this.buildEnd();
     this.buildHelp();
+    this.buildCareer();
     this.buildScrollNav();
   }
 
@@ -74,6 +76,7 @@ export class Menus {
       <div class="ns-field"><label>Player name</label><input class="ns-input ns-name" maxlength="14" placeholder="ENTER NAME" /></div>
       <button class="ns-btn primary ns-b-offline">Play Offline &nbsp;(vs Bots)</button>
       <button class="ns-btn ns-b-online">Play Online &nbsp;(with Friends)</button>
+      <button class="ns-btn ns-b-career">Career &amp; Stats</button>
       <button class="ns-btn ns-b-help">How to Play</button>
       <div class="ns-status"></div>
       <div class="ns-foot">WEBGL &bull; PEER-TO-PEER &bull; WORKS ON CLOUDFLARE PAGES</div>
@@ -83,6 +86,7 @@ export class Menus {
     this.statusEl = p.querySelector('.ns-status')!;
     p.querySelector('.ns-b-offline')!.addEventListener('click', () => { this.show('offline'); });
     p.querySelector('.ns-b-online')!.addEventListener('click', () => { this.show('online'); });
+    p.querySelector('.ns-b-career')!.addEventListener('click', () => { this.show('career'); });
     p.querySelector('.ns-b-help')!.addEventListener('click', () => { this.show('help'); });
     // positive note when touch is available (detection includes ?touch=1 for desktop preview)
     const note = p.querySelector('.ns-mobile-note') as HTMLElement;
@@ -427,6 +431,63 @@ export class Menus {
     this.addPanel('help', p);
   }
 
+  // ---- career & stats screen (records every finished match + the player name) ----
+  private careerBodyEl!: HTMLElement;
+
+  private buildCareer() {
+    const p = this.el(`<div>
+      <div class="ns-panel-title">CAREER</div>
+      <div class="ns-subtitle ns-career-name">&mdash;</div>
+      <div class="ns-career-grid"></div>
+      <div class="ns-career-hint">Every finished match is recorded on this device (survives app restarts).</div>
+      <div class="ns-career-list"></div>
+      <div class="ns-row" style="margin-top:14px">
+        <button class="ns-btn small danger ns-career-clear">Clear stats</button>
+        <button class="ns-btn small ns-back">Back</button>
+      </div>
+    </div>`);
+    this.careerBodyEl = p.querySelector('.ns-career-list')!;
+    p.querySelector('.ns-career-clear')!.addEventListener('click', () => {
+      clearCareerStats(this.playerName()); // wipe stats, keep the name
+      this.renderCareer();
+    });
+    p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
+    this.addPanel('career', p);
+  }
+
+  /** refresh the CAREER screen contents from storage (called on every open) */
+  private renderCareer() {
+    const panel = this.panels['career'];
+    const c: Career = loadCareer();
+    const name = c.name || this.playerName();
+    (panel.querySelector('.ns-career-name') as HTMLElement).textContent = name;
+    const kd = c.deaths > 0 ? (c.kills / c.deaths).toFixed(2) : String(c.kills || 0);
+    (panel.querySelector('.ns-career-grid') as HTMLElement).innerHTML = [
+      ['Matches', String(c.games)],
+      ['Kills', String(c.kills)],
+      ['Deaths', String(c.deaths)],
+      ['K/D', kd],
+      ['Wins', String(c.wins)],
+      ['Best wave', c.bestWave ? `W${c.bestWave}` : '&mdash;'],
+      ['Best BR', c.bestBr ? `#${c.bestBr}` : '&mdash;'],
+      ['Win rate', c.games ? Math.round((c.wins / c.games) * 100) + '%' : '&mdash;'],
+    ].map(([k, v]) => `<div class="ns-career-cell"><span>${k}</span><b>${v}</b></div>`).join('');
+    const list = this.careerBodyEl;
+    list.innerHTML = '';
+    if (!c.matches.length) {
+      list.innerHTML = `<div class="ns-career-empty">No matches recorded yet &mdash; go play one!</div>`;
+      return;
+    }
+    list.appendChild(this.el(`<div class="ns-sb-row head"><span>Match</span><span>K / D</span><span>Result</span></div>`));
+    for (const r of c.matches) {
+      list.appendChild(this.el(`<div class="ns-sb-row">
+        <span>${esc(modeLabel(r.m))}<small>${esc(fmtWhen(r.t))}${r.info ? ' &bull; ' + esc(r.info) : ''}</small></span>
+        <span>${r.k} / ${r.d}</span>
+        <span class="${r.w ? 'ns-res-win' : 'ns-res-lose'}">${r.w ? 'WIN' : 'LOSS'}</span>
+      </div>`));
+    }
+  }
+
   playerName(): string {
     const n = this.nameInput.value.trim();
     return (n || 'PLAYER' + Math.floor(100 + Math.random() * 900)).toUpperCase().slice(0, 14);
@@ -440,9 +501,18 @@ export class Menus {
   saveName() { localStorage.setItem('ns_name', this.playerName()); }
 
   show(panel: MenuPanel | null) {
-    if (panel === null) { this.wrap.classList.add('ns-hidden'); this.stopScrollRepeat(); return; }
-    this.wrap.classList.remove('ns-hidden');
+    // NOTE: classList.add/remove fire MutationObserver records even when they are
+    // no-ops (add-existing / remove-absent) — a self-observing observer then loops
+    // forever and the renderer watchdog kills the tab (the "START freezes the game"
+    // bug). ALWAYS guard DOM class writes so a no-op never mutates.
+    if (panel === null) {
+      if (!this.wrap.classList.contains('ns-hidden')) this.wrap.classList.add('ns-hidden');
+      this.stopScrollRepeat();
+      return;
+    }
+    if (this.wrap.classList.contains('ns-hidden')) this.wrap.classList.remove('ns-hidden');
     Object.entries(this.panels).forEach(([k, el]) => el.classList.toggle('ns-hidden', k !== panel));
+    if (panel === 'career') this.renderCareer(); // refresh stats every time it opens
     this.updateScrollNav();
   }
   isVisible(): boolean { return !this.wrap.classList.contains('ns-hidden'); }
@@ -477,15 +547,24 @@ export class Menus {
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
     });
     this.wrap.appendChild(this.scrollNav);
-    // refresh button visibility when the layout / panel content changes
+    // refresh button visibility when the layout / panel content changes.
+    // SAFETY: the observer is disconnected while its callback runs, so the callback
+    // can never observe (and re-trigger) its own DOM writes — even a future unsafe
+    // class write can no longer create a mutation-feedback loop.
     const check = () => this.updateScrollNav();
     window.addEventListener('resize', check);
     window.addEventListener('orientationchange', check);
     this.wrap.addEventListener('scroll', check, true);
     try {
-      new MutationObserver(check).observe(this.wrap, { childList: true, subtree: true, attributes: true });
+      this.scrollObs = new MutationObserver(() => {
+        this.scrollObs?.disconnect();
+        try { this.updateScrollNav(); } catch { /* never let the refresher throw in a loop */ }
+        if (this.scrollObs) this.scrollObs.observe(this.wrap, { childList: true, subtree: true, attributes: true });
+      });
+      this.scrollObs.observe(this.wrap, { childList: true, subtree: true, attributes: true });
     } catch { /* ancient browser — resize/scroll checks still work */ }
   }
+  private scrollObs: MutationObserver | null = null;
 
   private activePanel(): HTMLElement | null {
     for (const el of Object.values(this.panels)) if (!el.classList.contains('ns-hidden')) return el;
@@ -506,7 +585,12 @@ export class Menus {
   /** show the arrows only when the active panel really overflows */
   private updateScrollNav() {
     const p = this.activePanel();
-    if (!p || this.wrap.classList.contains('ns-hidden')) { this.scrollNav.classList.add('ns-hidden'); return; }
+    if (!p || this.wrap.classList.contains('ns-hidden')) {
+      // guard: classList.add of an EXISTING class still queues a MutationObserver
+      // record in Chromium -> observer feedback loop -> renderer killed (freeze bug)
+      if (!this.scrollNav.classList.contains('ns-hidden')) this.scrollNav.classList.add('ns-hidden');
+      return;
+    }
     const over = p.scrollHeight > p.clientHeight + 8;
     this.scrollNav.classList.toggle('ns-hidden', !over);
     this.wrap.classList.toggle('ns-nav-reserve', over);
