@@ -13,13 +13,18 @@
 
 const APP_PUBLIC_KEY = '8f16f09b4df7780805d4f0feb7543bdbd4dbc115ed18211a5c7d867691899a95';
 
-const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.5/DesertStrike3D-v3.5.apk';
+const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.6/DesertStrike3D-v3.6.apk';
+const APK_LOCAL_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.6-local/DesertStrike3D-Local-v3.6.apk';
+const APK_SLITHER_URL = 'https://github.com/izad369/neon-slither-izad/releases/download/v1.0/NeonSlither-1.0.apk';
 const GAME_URL = 'https://neon-strike-3d.rezaei-reza1092.workers.dev/';
+const GAME_MIRROR_URL = 'https://izad369.github.io/neon-strike-3d/';
+const SLITHER_MIRROR_URL = 'https://izad369.github.io/neon-slither-izad/';
 
 const HELP_TEXT = [
   '**DESERT STRIKE 3D** — command list',
   '\u2022 `/ping` \u2014 check I am alive',
-  '\u2022 `/apk` \u2014 latest Android APK (v3.5)',
+  '\u2022 `/apk` \u2014 latest Android APK (v3.6)',
+  '\u2022 `/apk local` / `/apk slither` \u2014 Local edition / Neon Slither',
   '\u2022 `/ask <question>` \u2014 ask about the game (edge edition)',
   '\u2022 `/help` \u2014 this list',
   '',
@@ -28,12 +33,19 @@ const HELP_TEXT = [
 ].join('\n');
 
 const APK_TEXT = [
-  '\uD83D\uDD25 **DESERT STRIKE 3D v3.5** \u2014 Android APK:',
+  '\uD83D\uDD25 **DESERT STRIKE 3D v3.6** \u2014 Android APK:',
   APK_URL,
   '',
+  '\uD83C\uDFEA **LOCAL edition** (offline only, separate app):',
+  APK_LOCAL_URL,
+  '',
+  '\uD83D\uDC0D **NEON SLITHER** Android APK (with Local 2P):',
+  APK_SLITHER_URL,
+  '',
   'Install: download \u2192 allow "install unknown apps" \u2192 open the APK.',
-  'Same signing key as v3.0/v3.1 \u2014 installs directly over them.',
-  'v3.5: inverted joystick fixed in embedded apps (Aippy) + new ROT flip button \u2022 v3.4: START button on portrait phones always visible & tappable (sticky) \u2022 v3.3: Duel death-screen rounds reset properly \u2022 Career & Stats screen \u2014 every finished match + your name recorded on-device \u2022 v3.2: shaped BR loot, smart pickups \u2022 v3.0/v3.1: 17 weapons, 3-slot loadout, Battle Royale (limited ammo, zone, plane drop), Duel 1v1, no friendly fire, tap weapon bar, forced landscape.',
+  'Same signing key as v2.0\u2013v3.5 \u2014 installs directly over them.',
+  'v3.6: Android 5+ support (minSdk 21) \u2022 separate LOCAL edition (offline, co-installable) \u2022 v3.5: inverted joystick fixed in embedded apps (Aippy) + ROT flip button \u2022 v3.4: sticky START on portrait \u2022 v3.3: Duel reset + Career stats \u2022 BR loot/ammo/roof-bots fixes.',
+  'Site blocked? Mirror: ' + GAME_MIRROR_URL,
 ].join('\n');
 
 // Tiny on-edge knowledge base for /ask (the big LLM brain lives on the dev node)
@@ -128,6 +140,15 @@ export default {
     // short link: latest Android APK (always points at the newest release asset)
     if (url.pathname === '/apk' && request.method === 'GET') {
       return Response.redirect(APK_URL, 302);
+    }
+    if (url.pathname === '/apk-local' && request.method === 'GET') {
+      return Response.redirect(APK_LOCAL_URL, 302);
+    }
+    if (url.pathname === '/apk-slither' && request.method === 'GET') {
+      return Response.redirect(APK_SLITHER_URL, 302);
+    }
+    if (url.pathname === '/mirror' && request.method === 'GET') {
+      return Response.redirect(GAME_MIRROR_URL, 302);
     }
     // everything else: serve the game (assets binding, SPA fallback)
     return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);
