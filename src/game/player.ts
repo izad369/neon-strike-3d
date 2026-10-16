@@ -123,6 +123,7 @@ export class LocalPlayer {
   /** gun game: force a specific weapon into the primary slot and equip it */
   setWeaponDirect(idx: number) {
     const i = ((idx % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+    this.slots[2] = -1; // gun game carries NO backup gun — the ladder is the whole loadout
     if (WEAPONS[i].melee) { this.slots[0] = i; this.slot = -1; this.switchSlot(0, true); return; }
     this.slots[1] = i;
     this.mags[i] = WEAPONS[i].magSize;

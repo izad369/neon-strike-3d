@@ -2,6 +2,7 @@
 import { Difficulty, GameMode, MapId } from './constants';
 import { esc } from './menus-utils';
 import { TouchMode, touchModePref, detectTouch } from './touch';
+import { QualityPref, qualityPref } from './world';
 import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE, DEFAULT_PRIMARY, DEFAULT_BACKUP } from './weapons';
 import { loadCareer, modeLabel, fmtWhen, clearCareerStats, type Career } from './stats';
 
@@ -17,6 +18,7 @@ export interface MenuCallbacks {
   onLeaveToMenu(): void;
   onRestartMatch(): void;
   onTouchMode(mode: TouchMode): void;
+  onQuality(pref: QualityPref): void;
 }
 
 export class Menus {
@@ -364,6 +366,11 @@ export class Menus {
           <button data-m="auto">Auto</button><button data-m="on">On</button><button data-m="off">Off</button>
         </div>
       </div>
+      <div class="ns-field"><label>Graphics quality</label>
+        <div class="ns-seg ns-gfx-seg">
+          <button data-q="auto">Auto</button><button data-q="low">Low</button><button data-q="med">Med</button><button data-q="high">High</button>
+        </div>
+      </div>
     </div>`);
     this.sensSlider = p.querySelector('.ns-sens')!;
     this.volSlider = p.querySelector('.ns-vol')!;
@@ -378,7 +385,22 @@ export class Menus {
       localStorage.setItem('ns_touch_mode', m);
       this.cb.onTouchMode(m);
     }));
+    const gfxSeg = p.querySelector('.ns-gfx-seg')!;
+    this.gfxSeg = gfxSeg as HTMLElement;
+    gfxSeg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      gfxSeg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      this.cb.onQuality((b.dataset.q as QualityPref));
+    }));
     this.addPanel('pause', p);
+  }
+
+  private gfxSeg!: HTMLElement;
+
+  /** reflect the stored graphics-quality preference in the pause-menu segmented control */
+  initGfxSeg() {
+    const q = qualityPref();
+    this.gfxSeg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.q === q));
   }
 
   private touchSeg!: HTMLElement;

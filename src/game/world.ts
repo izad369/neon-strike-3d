@@ -6,6 +6,41 @@ import { CFG, COLORS } from './constants';
 export type Box = { min: THREE.Vector3; max: THREE.Vector3 };
 export type WorldMapId = 'outpost' | 'urban' | 'oasis' | 'warzone';
 
+// ---------- graphics quality (weak-tablet friendly) ----------
+export type QualityPref = 'auto' | 'low' | 'med' | 'high';
+export type QualityLevel = 'low' | 'med' | 'high';
+const QUALITY_KEY = 'ns_gfx_quality';
+
+export function qualityPref(): QualityPref {
+  try {
+    const v = localStorage.getItem(QUALITY_KEY);
+    if (v === 'auto' || v === 'low' || v === 'med' || v === 'high') return v;
+  } catch { /* private mode */ }
+  return 'auto';
+}
+export function setQualityPref(p: QualityPref) {
+  try { localStorage.setItem(QUALITY_KEY, p); } catch { /* private mode */ }
+}
+
+/** sniff the GPU string: very weak mobile GPUs start on LOW automatically */
+function weakGPU(): boolean {
+  try {
+    const c = document.createElement('canvas');
+    const gl = (c.getContext('webgl') || c.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+    if (!gl) return true; // no WebGL at all — assume the worst
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const r = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+    // Adreno 2xx-5xx / Mali low-end / old PowerVR / software renderers
+    return /Adreno\s*([1-5]\d\d)|Mali-G(2|3|5)\d|Mali-4|Mali-T(6|7|8)|PowerVR\s*Rogue|PowerVR\s*GE8|Videocore|SwiftShader|Software|ANGLE \(Software/i.test(r);
+  } catch { return false; }
+}
+
+function resolveQuality(pref: QualityPref, mobile: boolean): QualityLevel {
+  if (pref === 'low' || pref === 'med' || pref === 'high') return pref;
+  if (mobile) return weakGPU() ? 'low' : 'med';
+  return 'high';
+}
+
 export class World {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -19,22 +54,75 @@ export class World {
   mapId: WorldMapId = 'outpost';
   private mapRoot = new THREE.Group();
   private raycaster = new THREE.Raycaster();
+  private mobile = false;        // mobile GPU preset (chosen at construction)
+  quality: QualityLevel = 'high';
+  // --- shared resources: hundreds of map boxes reuse these instead of
+  //     allocating a unique material/geometry per box (big CPU/GPU win on
+  //     weak tablets — fewer state changes, far less memory churn) ---
+  private matCache = new Map<number, THREE.MeshLambertMaterial>();
+  private boxCache = new Map<string, THREE.BoxGeometry>();
+  private cylCache = new Map<string, THREE.CylinderGeometry>();
 
   constructor(container: HTMLElement, opts?: { mobile?: boolean; map?: WorldMapId }) {
     const mobile = !!opts?.mobile;
+    this.mobile = mobile;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(COLORS.sky);
     this.scene.fog = new THREE.FogExp2(COLORS.sky, 0.011);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 400);
-    this.renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: 'high-performance' });
-    // mobile GPUs: cap pixel ratio harder (fill-rate is the bottleneck on phones)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.4 : 1.75));
+    const q0 = resolveQuality(qualityPref(), mobile);
+    this.quality = q0;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: !mobile && q0 !== 'low', powerPreference: 'high-performance',
+    });
+    this.applyQuality();
     container.appendChild(this.renderer.domElement);
     this.resize();
 
     this.scene.add(this.mapRoot);
     this.setMap(opts?.map ?? 'outpost');
+  }
+
+  /** pixel-ratio cap per quality level (fill rate is the #1 bottleneck on weak GPUs) */
+  private pixelCap(): number {
+    if (this.quality === 'low') return 0.75;
+    if (this.quality === 'med') return this.mobile ? 1.0 : 1.25;
+    return this.mobile ? 1.4 : 1.75;
+  }
+
+  /** apply the current quality level: pixel ratio + decorative trim visibility */
+  private applyQuality() {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap()));
+    const trims = this.quality !== 'low';
+    this.mapRoot.traverse(o => { if (o.userData.trim) o.visible = trims; });
+  }
+
+  /** change quality preference at runtime (pause menu) */
+  setQuality(pref: QualityPref) {
+    setQualityPref(pref);
+    this.quality = resolveQuality(pref, this.mobile);
+    this.applyQuality();
+  }
+
+  private mat(color: number): THREE.MeshLambertMaterial {
+    let m = this.matCache.get(color);
+    if (!m) { m = new THREE.MeshLambertMaterial({ color }); this.matCache.set(color, m); }
+    return m;
+  }
+
+  private boxGeo(w: number, h: number, d: number): THREE.BoxGeometry {
+    const k = `${w}|${h}|${d}`;
+    let g = this.boxCache.get(k);
+    if (!g) { g = new THREE.BoxGeometry(w, h, d); this.boxCache.set(k, g); }
+    return g;
+  }
+
+  private cylGeo(rt: number, rb: number, h: number, seg: number): THREE.CylinderGeometry {
+    const k = `${rt}|${rb}|${h}|${seg}`;
+    let g = this.cylCache.get(k);
+    if (!g) { g = new THREE.CylinderGeometry(rt, rb, h, seg); this.cylCache.set(k, g); }
+    return g;
   }
 
   /** wipe and build a different map (called when a match starts) */
@@ -82,9 +170,7 @@ export class World {
   }
 
   private addBox(x: number, y: number, z: number, w: number, h: number, d: number, opts?: { glow?: number; solid?: boolean; color?: number }) {
-    const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshLambertMaterial({ color: opts?.color ?? COLORS.wallBase });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(this.boxGeo(w, h, d), this.mat(opts?.color ?? COLORS.wallBase));
     mesh.position.set(x, y + h / 2, z);
     this.mapRoot.add(mesh);
     if (opts?.solid !== false) {
@@ -94,23 +180,19 @@ export class World {
         max: new THREE.Vector3(x + w / 2, y + h, z + d / 2),
       });
     }
-    // military trim on top edge (was neon glow)
+    // military trim on top edge (was neon glow) — decorative, hidden on LOW quality
     const glow = opts?.glow ?? COLORS.cyan;
-    const trim = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.08, 0.1, d + 0.08),
-      new THREE.MeshLambertMaterial({ color: glow })
-    );
+    const trim = new THREE.Mesh(this.boxGeo(w + 0.08, 0.1, d + 0.08), this.mat(glow));
     trim.position.set(x, y + h + 0.02, z);
+    trim.userData.trim = true;
+    trim.visible = this.quality !== 'low';
     this.mapRoot.add(trim);
     return mesh;
   }
 
   /** plain collider box without the trim (props) */
   private addPropBox(x: number, y: number, z: number, w: number, h: number, d: number, color: number, ry = 0) {
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      new THREE.MeshLambertMaterial({ color })
-    );
+    const mesh = new THREE.Mesh(this.boxGeo(w, h, d), this.mat(color));
     mesh.position.set(x, y + h / 2, z);
     if (ry) mesh.rotation.y = ry;
     this.mapRoot.add(mesh);
@@ -127,16 +209,10 @@ export class World {
 
   /** oil barrel (cylinder) with an AABB collider */
   private addBarrel(x: number, z: number, color: number, h = 1.15, r = 0.42) {
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(r, r, h, 12),
-      new THREE.MeshLambertMaterial({ color })
-    );
+    const mesh = new THREE.Mesh(this.cylGeo(r, r, h, 12), this.mat(color));
     mesh.position.set(x, h / 2, z);
     this.mapRoot.add(mesh);
-    const ring = new THREE.Mesh(
-      new THREE.CylinderGeometry(r * 1.04, r * 1.04, 0.08, 12),
-      new THREE.MeshLambertMaterial({ color: 0x3c3a30 })
-    );
+    const ring = new THREE.Mesh(this.cylGeo(r * 1.04, r * 1.04, 0.08, 12), this.mat(0x3c3a30));
     ring.position.set(x, h * 0.62, z);
     this.mapRoot.add(ring);
     this.solids.push(mesh);
@@ -158,8 +234,8 @@ export class World {
         const lx = -w / 2 + bag / 2 + i * bag + off - (row === 1 ? bag / 2 : 0);
         if (lx > w / 2) continue;
         const m = new THREE.Mesh(
-          new THREE.BoxGeometry(bag * 0.94, 0.5, 0.72),
-          new THREE.MeshLambertMaterial({ color: (i + row) % 2 ? c1 : c2 })
+          this.boxGeo(bag * 0.94, 0.5, 0.72),
+          this.mat((i + row) % 2 ? c1 : c2)
         );
         const cos = Math.cos(ry), sin = Math.sin(ry);
         m.position.set(x + lx * cos, 0.25 + y, z + lx * sin);

@@ -77,6 +77,74 @@ function askAnswer(q) {
   ].join('\n');
 }
 
+// Privacy policy page (plain HTML, served at /privacy)
+const PRIVACY_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — DESERT STRIKE 3D</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#15130f;color:#e2d7ba;
+       max-width:760px;margin:0 auto;padding:28px 20px 60px;line-height:1.65}
+  h1{font-size:26px;letter-spacing:1px;color:#e6cfa0;margin:0 0 4px}
+  h2{font-size:18px;color:#e6cfa0;margin:28px 0 8px}
+  p,li{font-size:15px}
+  .sub{color:#b3a077;font-size:14px;margin-bottom:22px}
+  b{color:#f0e6cc}
+</style>
+</head>
+<body>
+<h1>DESERT STRIKE 3D</h1>
+<div class="sub">Privacy Policy — last updated: October 2026</div>
+
+<h2>1. Overview</h2>
+<p>DESERT STRIKE 3D is an offline-first browser and Android shooter. It is published as an
+independent hobby project by a solo developer. This policy applies to the web version and to
+the Android APK build of the game, including the LOCAL edition.</p>
+
+<h2>2. No accounts, no personal data</h2>
+<p>The game has <b>no sign-in, no registration and no user accounts</b>. We do not collect,
+store or transmit your name, email address, phone number, location or contacts. There is no
+advertising SDK, no analytics tracker and no third-party data collection built into the game.</p>
+
+<h2>3. Data stored on your device only</h2>
+<p>The following settings are saved <b>locally on your device</b> (browser localStorage /
+Android WebView storage) and never leave it:</p>
+<ul>
+  <li>Your chosen in-game player name (a nickname you type yourself).</li>
+  <li>Graphics, touch-control, sensitivity and volume preferences.</li>
+  <li>Local career statistics (match results, kills/deaths) shown on the Career screen.</li>
+</ul>
+<p>Clearing your browser data or uninstalling the app removes all of it permanently.</p>
+
+<h2>4. Online multiplayer</h2>
+<p>Online matches are <b>peer-to-peer</b> (WebRTC). When you host or join a room, your browser
+exchanges connection data with the other players in that room only, for the sole purpose of
+syncing match gameplay (positions, health, score). There is no game server that stores match
+data. Room codes are temporary and expire when the match ends. Voice, chat and personal
+messages are not part of the game.</p>
+
+<h2>5. Discord bot</h2>
+<p>The optional Discord bot answers slash commands. It does not read or store message history
+of users and keeps no profiles. Commands like /apk only return public download links.</p>
+
+<h2>6. Permissions (Android APK)</h2>
+<p>The Android build requests <b>no special permissions</b>. It may use the network connection
+only when you play an online match or download nothing else. The game contains no in-app
+purchases and no ads.</p>
+
+<h2>7. Children</h2>
+<p>The game contains stylized blocky combat with no blood or gore. It is not directed at
+children under 13, and we knowingly collect no data from anyone — including children.</p>
+
+<h2>8. Changes &amp; contact</h2>
+<p>If this policy changes, the updated date above will change with it. Questions or data
+concerns? Contact the developer through the support email listed on the store listing, or via
+the GitHub project: <b>https://github.com/izad369/neon-strike-3d</b></p>
+</body>
+</html>`;
+
 async function verifySignature(request, body) {
   const sig = request.headers.get('x-signature-ed25519') || '';
   const ts = request.headers.get('x-signature-timestamp') || '';
@@ -149,6 +217,13 @@ export default {
     }
     if (url.pathname === '/mirror' && request.method === 'GET') {
       return Response.redirect(GAME_MIRROR_URL, 302);
+    }
+    // Privacy policy (required by Aptoide Connect / Google Play-style listings)
+    if (url.pathname === '/privacy' && request.method === 'GET') {
+      return new Response(PRIVACY_HTML, {
+        status: 200,
+        headers: { 'content-type': 'text/html;charset=UTF-8', 'cache-control': 'public, max-age=3600' },
+      });
     }
     // everything else: serve the game (assets binding, SPA fallback)
     return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);

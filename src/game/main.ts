@@ -118,9 +118,11 @@ class Game {
       onLeaveToMenu: () => this.leaveToMenu(),
       onRestartMatch: () => this.restartMatch(),
       onTouchMode: () => this.applyTouchMode(),
+      onQuality: (pref) => this.world.setQuality(pref),
     });
     this.menus.loadName();
     this.menus.initTouchSeg();
+    this.menus.initGfxSeg();
     this.player = new LocalPlayer(this.world, this.world.camera, this.audio, root);
     this.player.onShoot = (o, d) => this.onLocalShoot(o, d);
     this.player.touch = this.touch;
