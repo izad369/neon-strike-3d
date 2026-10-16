@@ -11,6 +11,7 @@ import { RemotePlayer } from './remote';
 import { HUD } from './hudbar';
 import { Menus } from './menus';
 import { NetHost, NetClient } from './net';
+import { LanHost, LanClient } from './lan';
 import { injectStyles } from './hud';
 import { normKey } from './player';
 import { TouchControls, detectTouch } from './touch';
@@ -43,6 +44,8 @@ class Game {
 
   private host: NetHost | null = null;
   private client: NetClient | null = null;
+  private lanHost: LanHost | null = null;
+  private lanClient: LanClient | null = null;
   private myId = '1';
   private nextPeerNum = 2;
   private touch: TouchControls;
@@ -119,6 +122,14 @@ class Game {
       onRestartMatch: () => this.restartMatch(),
       onTouchMode: () => this.applyTouchMode(),
       onQuality: (pref) => this.world.setQuality(pref),
+      onLanHost: (name, _bots, diff, mode, map, lo) => this.startLanHost(name, diff, mode, map, lo),
+      onLanJoin: (name, invite) => this.startLanJoin(name, invite),
+      onLanAnswer: (code) => this.lanAcceptAnswer(code),
+      onLanAddPlayer: () => {
+        this.lanHost?.createInvite();
+        this.menus.setLanHostNote('New invite ready — show the QR to the next player.');
+      },
+      onLanCancel: () => this.lanCancel(),
     });
     this.menus.loadName();
     this.menus.initTouchSeg();
@@ -733,6 +744,107 @@ class Game {
 
   // ---- host (online) ----
   private clientRoom = '';
+
+  // ---- LAN (Wi-Fi) multiplayer — manual-signaling WebRTC, zero internet ----
+
+  private startLanHost(name: string, diff: Difficulty, gameMode: GameMode, map: MapId, loadout: Loadout) {
+    this.audio.resume();
+    this.cleanupNet();
+    this.resetWorldEntities();
+    this.mode = 'host';
+    this.myId = '1';
+    this.diff = diff;
+    this.gameMode = gameMode === 'br' ? 'br' : gameMode === 'tdm' ? 'tdm' : 'dm';
+    this.hostLoadout = [loadout.knife, loadout.primary, loadout.backup];
+    this.player.limitedAmmo = this.gameMode === 'br';
+    if (this.gameMode !== 'br') {
+      this.player.setLoadout(loadout.knife, loadout.primary, loadout.backup);
+    }
+    this.world.setMap(this.gameMode === 'br' ? 'warzone' : map);
+    this.setupLocal(name);
+    this.initModeState(0, false); // LAN multiplayer: humans only
+    this.state = 'lobby';
+    this.menus.show('lan-host');
+    this.menus.setLanHostPlayers(0);
+    this.menus.setLanHostNote('Making invite code…');
+    this.lanHost = new LanHost({
+      onInviteReady: (invite) => {
+        this.menus.showLanHostInvite(invite);
+        this.menus.setLanHostNote('Show the QR / code to your friend — then paste or scan their ANSWER below.');
+        this.audio.ui();
+      },
+      onPlayerConnected: () => {
+        this.menus.setLanHostPlayers(this.lanHost?.conns.length ?? 0);
+        this.menus.setLanHostNote('Player connected! Start when ready — or add more players.');
+        this.audio.ui();
+      },
+      onPeerJoin: () => {
+        this.menus.setLanHostPlayers(this.lanHost?.conns.length ?? 0);
+      },
+      onPeerLeave: (conn) => {
+        const id = this.connId(conn);
+        if (id) this.removeRemote(id);
+        this.menus.setLanHostPlayers(this.lanHost?.conns.length ?? 0);
+      },
+      onMsg: (conn, msg) => this.onHostMsg(conn as never, msg as ClientMsg),
+      onError: (err) => this.menus.setLanHostNote('⚠ ' + err, true),
+    });
+    // the whole host game logic (onHostMsg / broadcast / connIds) works unchanged
+    // on top of the LAN transport — same duck-typed surface as NetHost
+    this.host = this.lanHost as unknown as NetHost;
+    void this.lanHost.createInvite();
+  }
+
+  private startLanJoin(name: string, invite: string) {
+    this.audio.resume();
+    this.cleanupNet();
+    this.resetWorldEntities();
+    this.mode = 'client';
+    this.myId = '?';
+    this.clientRoom = 'WI-FI';
+    this.state = 'lobby';
+    this.menus.setLanJoinNote('Reading invite…');
+    this.lanClient = new LanClient({
+      onInviteAccepted: () => this.menus.setLanJoinNote('Invite OK — making your answer…'),
+      onAnswerReady: (answer) => {
+        this.menus.showLanJoinAnswer(answer);
+        this.menus.setLanJoinNote('Show this back to the HOST (they scan or paste it) — then wait…');
+      },
+      onOpen: () => {
+        this.lanClient?.send({ t: 'hi', name });
+        this.menus.show('lobby');
+        this.menus.setLobby('WI-FI', 1);
+        this.menus.setLobbyNote('Connected! Waiting for the host to start…');
+        this.audio.ui();
+      },
+      onMsg: (msg) => this.onClientMsg(msg as HostMsg),
+      onError: (err) => this.menus.setLanJoinNote('⚠ ' + err, true),
+      onClosed: () => {
+        if (this.state === 'playing' || this.state === 'end') {
+          this.leaveToMenu();
+          this.menus.setStatus('Disconnected from host.', true);
+        } else {
+          this.menus.setLanJoinNote('Host closed the connection.', true);
+          this.menus.resetLanJoin();
+        }
+      },
+    });
+    this.client = this.lanClient as unknown as NetClient;
+    void this.lanClient.connect(invite);
+  }
+
+  private lanAcceptAnswer(code: string) {
+    if (!this.lanHost) return;
+    this.lanHost.acceptAnswer(code)
+      .then(() => this.menus.setLanHostNote('Answer accepted — connecting…'))
+      .catch((e: unknown) => this.menus.setLanHostNote('⚠ ' + ((e as Error)?.message || 'Bad answer code.'), true));
+  }
+
+  private lanCancel() {
+    this.cleanupNet();
+    this.menus.resetLanJoin();
+    this.menus.show('online');
+  }
 
   private startHost(name: string, _botCount: number, diff: Difficulty, gameMode: GameMode, map: MapId, loadout: Loadout) {
     this.audio.resume();
@@ -1409,6 +1521,8 @@ class Game {
   private cleanupNet() {
     this.host?.destroy(); this.host = null;
     this.client?.destroy(); this.client = null;
+    this.lanHost?.destroy(); this.lanHost = null;
+    this.lanClient?.destroy(); this.lanClient = null;
     this.connIds.clear();
     this.nextPeerNum = 2;
   }

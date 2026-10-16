@@ -191,6 +191,18 @@ export function injectStyles() {
 .ns-code-box { font-family: 'Black Ops One', sans-serif; font-size: 42px; letter-spacing: 10px; color: #cdb27a;
   text-shadow: 0 2px 3px rgba(0,0,0,0.6); background: rgba(30,26,18,0.9); border: 1px dashed #b3a077; border-radius: 8px; padding: 14px 10px 10px; margin: 12px 0; }
 .ns-code-hint { font-size: 13px; color: #a08f6f; margin-bottom: 14px; line-height: 1.5; }
+/* ---- LAN (Wi-Fi) panels ---- */
+.ns-code-area { width: 100%; padding: 9px 12px; background: rgba(30,26,18,0.92); border: 1px solid #6b5d43; border-radius: 5px;
+  color: #cdb27a; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5;
+  resize: none; word-break: break-all; user-select: text; -webkit-user-select: text; touch-action: manipulation; }
+.ns-code-area:focus { border-color: #d6b96a; outline: none; }
+.ns-qr { display: block; width: min(280px, 68vw); height: auto; background: #f3e9cf; border: 3px solid #d6b96a;
+  border-radius: 8px; margin: 10px auto 4px; }
+.ns-lan-or { text-align: center; color: #8f815f; font-size: 13px; margin: 8px 0 4px; }
+.ns-scan-zone { margin: 8px 0 4px; }
+.ns-scan-video { display: block; width: min(280px, 68vw); aspect-ratio: 4 / 3; object-fit: cover; background: #000;
+  border: 2px solid #6b5d43; border-radius: 8px; margin: 0 auto; }
+.ns-scan-hint { text-align: center; font-size: 13px; color: #b3a37f; margin: 6px 0; }
 .ns-help { text-align: left; font-size: 15px; line-height: 1.75; color: #ddd2b4; background: rgba(30,26,18,0.6);
   border: 1px solid #55492f; border-radius: 6px; padding: 16px 20px; margin-top: 8px; }
 .ns-help b { color: #cdb27a; }

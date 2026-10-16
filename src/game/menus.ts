@@ -5,8 +5,10 @@ import { TouchMode, touchModePref, detectTouch } from './touch';
 import { QualityPref, qualityPref } from './world';
 import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE, DEFAULT_PRIMARY, DEFAULT_BACKUP } from './weapons';
 import { loadCareer, modeLabel, fmtWhen, clearCareerStats, type Career } from './stats';
+import { drawQr } from './qr';
+import { QrScanner } from './qrscan';
 
-export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help' | 'career';
+export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help' | 'career' | 'lan-host' | 'lan-join';
 
 export interface Loadout { knife: number; primary: number; backup: number }
 
@@ -19,6 +21,13 @@ export interface MenuCallbacks {
   onRestartMatch(): void;
   onTouchMode(mode: TouchMode): void;
   onQuality(pref: QualityPref): void;
+  /** LAN (Wi-Fi, no internet) — same host settings as the online panel */
+  onLanHost(name: string, bots: number, diff: Difficulty, mode: GameMode, map: MapId, loadout: Loadout): void;
+  onLanJoin(name: string, inviteCode: string): void;
+  /** host pasted/scanned the joiner's answer code */
+  onLanAnswer(answerCode: string): void;
+  onLanAddPlayer(): void;
+  onLanCancel(): void;
 }
 
 export class Menus {
@@ -52,6 +61,8 @@ export class Menus {
     this.buildOffline();
     this.buildOnline();
     this.buildLobby();
+    this.buildLanHost();
+    this.buildLanJoin();
     this.buildPause();
     this.buildEnd();
     this.buildHelp();
@@ -284,9 +295,13 @@ export class Menus {
         <div class="ns-row"><input class="ns-input ns-code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase; letter-spacing:6px; text-align:center" /></div>
       </div>
       <button class="ns-btn ns-join">Join Match</button>
+      <div class="ns-field" style="margin-top:18px"><label>Same Wi-Fi only — works with NO internet:</label>
+        <button class="ns-btn ns-lan">Host on Wi-Fi (LAN)</button>
+        <button class="ns-btn ns-lan-join">Join on Wi-Fi (LAN)</button>
+      </div>
       <button class="ns-btn small ns-back">Back</button>
       <div class="ns-status ns-online-status"></div>
-      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC — no game server needed. Share the room code with a friend. Multiplayer matches never spawn bots — only real players fight. Battle Royale online is everyone-for-themselves on the WARZONE map.</div>
+      <div class="ns-code-hint" style="margin-top:14px">Online mode uses peer-to-peer WebRTC — no game server needed. Share the room code with a friend. Multiplayer matches never spawn bots — only real players fight. Battle Royale online is everyone-for-themselves on the WARZONE map. LAN mode needs zero internet: invite by QR code or copy/paste.</div>
     </div>`);
     this.codeInput = p.querySelector('.ns-code')!;
     this.onlineStatusEl = p.querySelector('.ns-online-status')!;
@@ -326,8 +341,216 @@ export class Menus {
       if (c.length < 4) { this.setOnlineStatus('Enter the 5-letter room code.', true); return; }
       this.cb.onJoin(this.playerName(), c);
     });
+    p.querySelector('.ns-lan')!.addEventListener('click', () =>
+      this.cb.onLanHost(this.playerName(), 0, this.diff, this.onlineMode, this.onlineMode === 'br' ? 'outpost' : ms.get(), this.readLoadout(this.onHostLoadoutSels)));
+    p.querySelector('.ns-lan-join')!.addEventListener('click', () => {
+      this.setLanJoinNote('');
+      this.show('lan-join');
+    });
     p.querySelector('.ns-back')!.addEventListener('click', () => this.show('main'));
     this.addPanel('online', p);
+  }
+
+  // ---- LAN (Wi-Fi) host: invite QR/code in, answer code back, zero internet ----
+
+  private lanHostQr!: HTMLCanvasElement;
+  private lanHostCode!: HTMLTextAreaElement;
+  private lanHostStatusEl!: HTMLElement;
+  private lanHostPlayersEl!: HTMLElement;
+  private lanHostAccept!: HTMLButtonElement;
+  private lanHostAnswerTa!: HTMLTextAreaElement;
+  private scanHost = new QrScanner();
+  private scanJoin = new QrScanner();
+
+  private scanZoneHtml(): string {
+    return `<div class="ns-scan-zone ns-hidden"><video class="ns-scan-video" autoplay muted playsinline></video>
+      <div class="ns-scan-hint">Point the camera at the QR code…</div></div>`;
+  }
+
+  private wireScan(btn: HTMLButtonElement, video: HTMLVideoElement, zone: HTMLElement,
+    onText: (t: string) => void, onNote: (msg: string, err?: boolean) => void) {
+    const idle = btn.textContent;
+    btn.addEventListener('click', () => {
+      const scanning = !zone.classList.contains('ns-hidden');
+      if (scanning) {
+        this.scanHost.stop(); this.scanJoin.stop();
+        zone.classList.add('ns-hidden');
+        btn.textContent = idle;
+        return;
+      }
+      zone.classList.remove('ns-hidden');
+      btn.textContent = 'Stop camera';
+      void this.scanHost.start(video, (t) => {
+        zone.classList.add('ns-hidden');
+        btn.textContent = idle;
+        onText(t);
+      }, (err) => {
+        zone.classList.add('ns-hidden');
+        btn.textContent = idle;
+        onNote(err, true);
+      });
+    });
+  }
+
+  private async copyText(text: string, btn: HTMLButtonElement, okLabel: string) {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch { /* fall through */ }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        ok = document.execCommand('copy');
+        ta.remove();
+      } catch { ok = false; }
+    }
+    const old = btn.textContent;
+    btn.textContent = ok ? okLabel : 'Copy failed — long-press the code';
+    setTimeout(() => { btn.textContent = old; }, 1400);
+  }
+
+  private buildLanHost() {
+    const p = this.el(`<div>
+      <div class="ns-panel-title">WI-FI (LAN) HOST</div>
+      <div class="ns-subtitle">Zero internet — everyone must be on the SAME Wi-Fi</div>
+      <div class="ns-status ns-lanhost-status"></div>
+      <div class="ns-field"><label>STEP 1 — friend scans this invite QR:</label>
+        <canvas class="ns-qr ns-lanhost-qr"></canvas>
+        <div class="ns-lan-or">…or send them this code (any way you like):</div>
+        <textarea class="ns-code-area ns-lanhost-code" readonly rows="3" spellcheck="false"></textarea>
+        <div class="ns-row ns-cta-row">
+          <button class="ns-btn small ns-lanhost-copy">Copy code</button>
+          <button class="ns-btn small ns-lanhost-new">New invite code</button>
+        </div>
+      </div>
+      <div class="ns-field"><label>STEP 2 — get their answer back:</label>
+        <button class="ns-btn ns-lanhost-scan">${'Scan their QR (camera)'}</button>
+        ${this.scanZoneHtml()}
+        <textarea class="ns-input ns-code-area ns-lanhost-answer" rows="3" spellcheck="false" placeholder="paste the ANSWER code they show you (DSA…)"></textarea>
+        <button class="ns-btn primary ns-cta ns-lanhost-accept">Connect answer</button>
+      </div>
+      <div class="ns-lobby-players ns-lanhost-players">0 players connected</div>
+      <div class="ns-row ns-cta-row">
+        <button class="ns-btn primary ns-cta ns-lanhost-start">Start Match</button>
+      </div>
+      <button class="ns-btn small danger ns-lanhost-cancel">Cancel</button>
+    </div>`);
+    this.lanHostQr = p.querySelector('.ns-lanhost-qr') as HTMLCanvasElement;
+    this.lanHostCode = p.querySelector('.ns-lanhost-code') as HTMLTextAreaElement;
+    this.lanHostStatusEl = p.querySelector('.ns-lanhost-status') as HTMLElement;
+    this.lanHostPlayersEl = p.querySelector('.ns-lanhost-players') as HTMLElement;
+    this.lanHostAnswerTa = p.querySelector('.ns-lanhost-answer') as HTMLTextAreaElement;
+    this.lanHostAccept = p.querySelector('.ns-lanhost-accept') as HTMLButtonElement;
+    p.querySelector('.ns-lanhost-copy')!.addEventListener('click', (e) =>
+      void this.copyText(this.lanHostCode.value, e.currentTarget as HTMLButtonElement, 'Copied!'));
+    p.querySelector('.ns-lanhost-new')!.addEventListener('click', () => this.cb.onLanAddPlayer());
+    this.wireScan(p.querySelector('.ns-lanhost-scan') as HTMLButtonElement,
+      p.querySelector('.ns-scan-video') as HTMLVideoElement,
+      p.querySelector('.ns-scan-zone') as HTMLElement,
+      (t) => { this.setLanHostNote('QR scanned — connecting…'); this.cb.onLanAnswer(t); },
+      (msg, err) => this.setLanHostNote(msg, err));
+    this.lanHostAccept.addEventListener('click', () => {
+      const c = this.lanHostAnswerTa.value.trim();
+      if (c.length < 12) { this.setLanHostNote('Paste the ANSWER code your friend got (starts with DSA).', true); return; }
+      this.setLanHostNote('Connecting…');
+      this.cb.onLanAnswer(c);
+    });
+    p.querySelector('.ns-lanhost-start')!.addEventListener('click', () =>
+      window.dispatchEvent(new CustomEvent('ns-lobby-start')));
+    p.querySelector('.ns-lanhost-cancel')!.addEventListener('click', () => this.cb.onLanCancel());
+    this.addPanel('lan-host', p);
+  }
+
+  // ---- LAN (Wi-Fi) join: scan/paste invite, show answer back ----
+
+  private lanJoinStatusEl!: HTMLElement;
+  private lanJoinStep1El!: HTMLElement;
+  private lanJoinStep2El!: HTMLElement;
+  private lanJoinQr!: HTMLCanvasElement;
+  private lanJoinCode!: HTMLTextAreaElement;
+  private lanJoinInviteTa!: HTMLTextAreaElement;
+
+  private buildLanJoin() {
+    const p = this.el(`<div>
+      <div class="ns-panel-title">JOIN WI-FI (LAN)</div>
+      <div class="ns-subtitle">Zero internet — be on the host's Wi-Fi</div>
+      <div class="ns-status ns-lanjoin-status"></div>
+      <div class="ns-field ns-lanjoin-step1"><label>STEP 1 — scan the host's invite QR:</label>
+        <button class="ns-btn ns-lanjoin-scan">${'Scan QR (camera)'}</button>
+        ${this.scanZoneHtml()}
+        <div class="ns-lan-or">…or paste the invite code:</div>
+        <textarea class="ns-input ns-code-area ns-lanjoin-invite" rows="3" spellcheck="false" placeholder="paste the INVITE code from the host (DSL…)"></textarea>
+        <button class="ns-btn primary ns-lanjoin-connect">Connect</button>
+      </div>
+      <div class="ns-field ns-hidden ns-lanjoin-step2"><label>STEP 2 — show this back to the HOST:</label>
+        <canvas class="ns-qr ns-lanjoin-qr"></canvas>
+        <div class="ns-lan-or">…or send them this code:</div>
+        <textarea class="ns-code-area ns-lanjoin-code" readonly rows="3" spellcheck="false"></textarea>
+        <button class="ns-btn small ns-lanjoin-copy">Copy answer code</button>
+      </div>
+      <button class="ns-btn small danger ns-lanjoin-cancel">Cancel</button>
+    </div>`);
+    this.lanJoinStatusEl = p.querySelector('.ns-lanjoin-status') as HTMLElement;
+    this.lanJoinStep1El = p.querySelector('.ns-lanjoin-step1') as HTMLElement;
+    this.lanJoinStep2El = p.querySelector('.ns-lanjoin-step2') as HTMLElement;
+    this.lanJoinQr = p.querySelector('.ns-lanjoin-qr') as HTMLCanvasElement;
+    this.lanJoinCode = p.querySelector('.ns-lanjoin-code') as HTMLTextAreaElement;
+    this.lanJoinInviteTa = p.querySelector('.ns-lanjoin-invite') as HTMLTextAreaElement;
+    this.wireScan(p.querySelector('.ns-lanjoin-scan') as HTMLButtonElement,
+      p.querySelector('.ns-scan-video') as HTMLVideoElement,
+      p.querySelector('.ns-scan-zone') as HTMLElement,
+      (t) => { this.lanJoinInviteTa.value = t; this.cb.onLanJoin(this.playerName(), t); },
+      (msg, err) => this.setLanJoinNote(msg, err));
+    p.querySelector('.ns-lanjoin-connect')!.addEventListener('click', () => {
+      const c = this.lanJoinInviteTa.value.trim();
+      if (c.length < 12) { this.setLanJoinNote('Paste the INVITE code from the host screen (starts with DSL).', true); return; }
+      this.setLanJoinNote('Reading invite…');
+      this.cb.onLanJoin(this.playerName(), c);
+    });
+    p.querySelector('.ns-lanjoin-copy')!.addEventListener('click', (e) =>
+      void this.copyText(this.lanJoinCode.value, e.currentTarget as HTMLButtonElement, 'Copied!'));
+    p.querySelector('.ns-lanjoin-cancel')!.addEventListener('click', () => this.cb.onLanCancel());
+    this.addPanel('lan-join', p);
+  }
+
+  /** host: display the current invite code + its QR */
+  showLanHostInvite(invite: string) {
+    this.lanHostCode.value = invite;
+    drawQr(this.lanHostQr, invite);
+  }
+
+  setLanHostNote(text: string, err = false) {
+    this.lanHostStatusEl.textContent = text;
+    this.lanHostStatusEl.classList.toggle('err', !!err);
+    if (err) this.lanHostStatusEl.classList.add('err');
+  }
+
+  setLanHostPlayers(n: number) {
+    this.lanHostPlayersEl.textContent = n === 1 ? '1 player connected' : `${n} players connected`;
+  }
+
+  /** joiner: display the answer the host needs */
+  showLanJoinAnswer(answer: string) {
+    this.lanJoinStep1El.classList.add('ns-hidden');
+    this.lanJoinStep2El.classList.remove('ns-hidden');
+    this.lanJoinCode.value = answer;
+    drawQr(this.lanJoinQr, answer);
+  }
+
+  resetLanJoin() {
+    this.lanJoinStep1El.classList.remove('ns-hidden');
+    this.lanJoinStep2El.classList.add('ns-hidden');
+    this.lanJoinInviteTa.value = '';
+    this.setLanJoinNote('');
+  }
+
+  setLanJoinNote(text: string, err = false) {
+    this.lanJoinStatusEl.textContent = text;
+    if (err) this.lanJoinStatusEl.classList.add('err');
+    else this.lanJoinStatusEl.classList.remove('err');
   }
 
   private buildLobby() {
