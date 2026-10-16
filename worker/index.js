@@ -13,8 +13,8 @@
 
 const APP_PUBLIC_KEY = '8f16f09b4df7780805d4f0feb7543bdbd4dbc115ed18211a5c7d867691899a95';
 
-const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.7/DesertStrike3D-v3.7.apk';
-const APK_LOCAL_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.7-local/DesertStrike3D-Local-v3.7.apk';
+const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.8/DesertStrike3D-v3.8.apk';
+const APK_LOCAL_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.8-local/DesertStrike3D-Local-v3.8.apk';
 const APK_SLITHER_URL = 'https://github.com/izad369/neon-slither-izad/releases/download/v1.0/NeonSlither-1.0.apk';
 const GAME_URL = 'https://neon-strike-3d.rezaei-reza1092.workers.dev/';
 const GAME_MIRROR_URL = 'https://izad369.github.io/neon-strike-3d/';
@@ -23,7 +23,7 @@ const SLITHER_MIRROR_URL = 'https://izad369.github.io/neon-slither-izad/';
 const HELP_TEXT = [
   '**DESERT STRIKE 3D** — command list',
   '\u2022 `/ping` \u2014 check I am alive',
-  '\u2022 `/apk` \u2014 latest Android APK (v3.7)',
+  '\u2022 `/apk` \u2014 latest Android APK (v3.8)',
   '\u2022 `/apk local` / `/apk slither` \u2014 Local edition / Neon Slither',
   '\u2022 `/ask <question>` \u2014 ask about the game (edge edition)',
   '\u2022 `/help` \u2014 this list',
@@ -33,7 +33,7 @@ const HELP_TEXT = [
 ].join('\n');
 
 const APK_TEXT = [
-  '\uD83D\uDD25 **DESERT STRIKE 3D v3.7** \u2014 Android APK:',
+  '\uD83D\uDD25 **DESERT STRIKE 3D v3.8** \u2014 Android APK:',
   APK_URL,
   '',
   '\uD83C\uDFEA **LOCAL edition** (offline only, separate app):',
@@ -43,8 +43,8 @@ const APK_TEXT = [
   APK_SLITHER_URL,
   '',
   'Install: download \u2192 allow "install unknown apps" \u2192 open the APK.',
-  'Same signing key as v2.0\u2013v3.6 \u2014 installs directly over them.',
-  'v3.7: Gun Game = one gun (backup removed) \u2022 Graphics quality setting (Auto/Low/Med/High, weak-GPU auto-LOW) \u2022 /privacy page \u2022 v3.6: Android 5+ (minSdk 21) + separate LOCAL edition \u2022 v3.5: joystick fix + ROT flip \u2022 v3.4: sticky START.',
+  'Same signing key as v2.0\u2013v3.7 \u2014 installs directly over them.',
+  'v3.8: NEW — LAN multiplayer over Wi-Fi with ZERO internet (QR / copy-paste invites) \u2022 v3.7: Gun Game = one gun + graphics quality (weak-GPU auto-LOW) \u2022 v3.6: Android 5+ (minSdk 21) + separate LOCAL edition \u2022 v3.5: joystick fix + ROT flip \u2022 v3.4: sticky START.',
   'Site blocked? Mirror: ' + GAME_MIRROR_URL,
 ].join('\n');
 
@@ -54,9 +54,11 @@ function askAnswer(q) {
   const has = (...ws) => ws.some(w => s.includes(w));
   if (has('hello', 'hi ', 'hey', 'salam')) return 'Hey! Soldier ready. Try `/help` to see what I can do. \uD83C\uDFAE';
   if (has('apk', 'install', 'android', 'download')) return APK_TEXT;
-  if (has('multiplayer', 'online', 'friend', 'room', 'p2p', 'server')) return [
+  if (has('multiplayer', 'online', 'friend', 'room', 'p2p', 'server', 'wifi', 'wi-fi', 'lan')) return [
     '**Online multiplayer** is peer-to-peer (WebRTC via PeerJS) \u2014 no game server needed.',
     'Host: PLAY ONLINE \u2192 CREATE \u2192 share the 5-letter room code. Friends: PLAY ONLINE \u2192 JOIN + code.',
+    '**NEW v3.8 \u2014 LAN mode with ZERO internet:** PLAY ONLINE \u2192 Host on Wi-Fi (LAN) / Join on Wi-Fi (LAN).',
+    'Same Wi-Fi only: host shows a QR code (or copy-paste code), friend scans, sends the answer back, done.',
     'The host\u2019s phone/browser is the authority; snapshots sync at 12 Hz.',
     'Multiplayer is humans-only \u2014 zero bots, ever.',
   ].join('\n');
