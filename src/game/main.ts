@@ -1117,7 +1117,18 @@ class Game {
         if (msg.b === this.myId) this.audio.kill();
         if (msg.v === this.myId) this.onLocalDeath();
       } else if (msg.k === 'spawn') {
-        if (msg.i === this.myId) this.respawnLocal(new THREE.Vector3(...msg.p));
+        if (msg.i === this.myId) {
+          if (this.state !== 'playing') {
+            // mid-match join: the host dropped us straight into a running match
+            this.state = 'playing';
+            this.menus.show(null);
+            this.hud.show(true);
+            this.hud.setRoom('ROOM ' + this.clientRoom);
+            this.hud.setKD(this.scores.get(this.myId)?.k ?? 0, this.scores.get(this.myId)?.d ?? 0);
+            this.enterTouchUI();
+          }
+          this.respawnLocal(new THREE.Vector3(...msg.p));
+        }
       } else if (msg.k === 'dmg') {
         if (msg.i === this.myId) {
           this.player.applyServerDamage(msg.amt);

@@ -9,7 +9,124 @@
 // Routes:
 //   GET  /bot/health   -> 200 {ok:true}
 //   POST /bot/discord  -> Discord interactions endpoint (Ed25519 verified)
+//   /signal/<code>/*   -> WebRTC signaling mailbox (SignalRoom Durable Object)
 //   anything else      -> static assets (dist/), SPA fallback
+
+// ---- P2P signaling mailbox (one Durable Object per room code) -------------
+// Joiner flow:  POST /signal/<code>/join        -> {ok:true,id}
+//               POST /signal/<code>/offer       -> {id, sdp}
+//               GET  /signal/<code>/answer?id=  -> polls for the host answer
+// Host flow:    POST /signal/<code>/host        -> claims the room
+//               GET  /signal/<code>/offers      -> polls for joiner offers
+//               POST /signal/<code>/answer      -> {id, sdp}
+// Plain HTTPS only — reachable anywhere the game page itself is reachable.
+export class SignalRoom {
+  constructor(ctx, env) { this.ctx = ctx; }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.slice(1);
+    const now = Date.now();
+    await this.sweep(now);
+
+    if (action === 'host') {
+      const host = await this.ctx.storage.get('host');
+      if (typeof host === 'number' && now - host < 90000) {
+        return Response.json({ ok: false, taken: true });
+      }
+      // fresh room: wipe whatever is left from the previous occupant
+      const old = [];
+      for (const k of (await this.ctx.storage.list()).keys()) old.push(k);
+      if (old.length) await this.ctx.storage.delete(old);
+      await this.ctx.storage.put('host', now);
+      return Response.json({ ok: true });
+    }
+
+    const host = await this.ctx.storage.get('host');
+    const hostActive = typeof host === 'number' && now - host < 90000;
+
+    if (action === 'join') {
+      if (!hostActive) return Response.json({ ok: false, reason: 'no-room' });
+      const id = 'J' + Math.random().toString(36).slice(2, 8);
+      await this.ctx.storage.put('joiner:' + id, now);
+      return Response.json({ ok: true, id });
+    }
+
+    if (action === 'offer' && request.method === 'POST') {
+      const b = await request.json().catch(() => null);
+      if (!b || !b.id || !b.sdp) return Response.json({ ok: false }, { status: 400 });
+      if (!hostActive) return Response.json({ ok: false, reason: 'no-room' });
+      const seq = ((await this.ctx.storage.get('seq')) || 0) + 1;
+      await this.ctx.storage.put('seq', seq);
+      await this.ctx.storage.put('o:' + seq, { id: String(b.id), sdp: String(b.sdp).slice(0, 20000), ts: now });
+      return Response.json({ ok: true });
+    }
+
+    if (action === 'offers' && request.method === 'GET') {
+      await this.ctx.storage.put('host', now); // polling = host heartbeat
+      const after = Number(url.searchParams.get('after') || 0) || 0;
+      const offers = [];
+      for (const [k, v] of await this.ctx.storage.list({ prefix: 'o:' })) {
+        if (!v || typeof v !== 'object') continue;
+        const seq = Number(k.slice(2));
+        if (seq > after && now - v.ts < 300000) offers.push({ seq, id: v.id, sdp: v.sdp });
+      }
+      offers.sort((a, b) => a.seq - b.seq);
+      return Response.json({ ok: true, offers });
+    }
+
+    if (action === 'answer') {
+      if (request.method === 'POST') {
+        const b = await request.json().catch(() => null);
+        if (!b || !b.id || !b.sdp) return Response.json({ ok: false }, { status: 400 });
+        await this.ctx.storage.put('a:' + b.id, { sdp: String(b.sdp).slice(0, 20000), ts: now });
+        return Response.json({ ok: true });
+      }
+      const id = url.searchParams.get('id') || '';
+      const a = await this.ctx.storage.get('a:' + id);
+      if (a && typeof a === 'object' && now - a.ts < 300000) {
+        return Response.json({ ok: true, sdp: a.sdp });
+      }
+      return Response.json({ ok: false, waiting: hostActive });
+    }
+
+    return Response.json({ ok: false, reason: 'bad-action' }, { status: 404 });
+  }
+
+  async sweep(now) {
+    for (const [k, v] of await this.ctx.storage.list()) {
+      if (k === 'seq') continue; // plain counter, not a timestamp
+      const ts = (v && typeof v === 'object') ? v.ts : v;
+      if (typeof ts === 'number' && now - ts > 600000) await this.ctx.storage.delete(k);
+    }
+  }
+}
+
+const SIGNAL_CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET,POST,OPTIONS',
+  'access-control-allow-headers': 'content-type',
+  'cache-control': 'no-store',
+};
+
+async function handleSignal(request, url, env) {
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: SIGNAL_CORS });
+  const m = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/(host|join|offer|offers|answer)$/);
+  if (!m) return new Response(JSON.stringify({ ok: false, reason: 'bad-path' }),
+    { status: 404, headers: { ...SIGNAL_CORS, 'content-type': 'application/json' } });
+  const ns = env && env.ROOM;
+  const room = ns ? ns.get(ns.idFromName(m[1].toUpperCase())) : null;
+  if (!room) return new Response(JSON.stringify({ ok: false, reason: 'no-binding' }),
+    { status: 500, headers: { ...SIGNAL_CORS, 'content-type': 'application/json' } });
+  const resp = await room.fetch(new Request('https://room/' + m[2] + (url.search || ''), {
+    method: request.method,
+    headers: request.headers.get('content-type') ? { 'content-type': request.headers.get('content-type') } : undefined,
+    body: request.method === 'POST' ? await request.text() : undefined,
+  }));
+  const out = new Response(resp.body, resp);
+  for (const [k, v] of Object.entries(SIGNAL_CORS)) out.headers.set(k, v);
+  return out;
+}
 
 const APP_PUBLIC_KEY = '8f16f09b4df7780805d4f0feb7543bdbd4dbc115ed18211a5c7d867691899a95';
 
@@ -55,7 +172,7 @@ function askAnswer(q) {
   if (has('hello', 'hi ', 'hey', 'salam')) return 'Hey! Soldier ready. Try `/help` to see what I can do. \uD83C\uDFAE';
   if (has('apk', 'install', 'android', 'download')) return APK_TEXT;
   if (has('multiplayer', 'online', 'friend', 'room', 'p2p', 'server', 'wifi', 'wi-fi', 'lan')) return [
-    '**Online multiplayer** is peer-to-peer (WebRTC via PeerJS) \u2014 no game server needed.',
+    '**Online multiplayer** is peer-to-peer (WebRTC). Signaling runs on this game server itself \u2014 no third-party service.',
     'Host: PLAY ONLINE \u2192 CREATE \u2192 share the 5-letter room code. Friends: PLAY ONLINE \u2192 JOIN + code.',
     '**NEW v3.8 \u2014 LAN mode with ZERO internet:** PLAY ONLINE \u2192 Host on Wi-Fi (LAN) / Join on Wi-Fi (LAN).',
     'Same Wi-Fi only: host shows a QR code (or copy-paste code), friend scans, sends the answer back, done.',
@@ -184,6 +301,9 @@ export async function handleInteraction(body) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/signal/')) {
+      return handleSignal(request, url, env);
+    }
     if (url.pathname === '/bot/health') {
       return Response.json({ ok: true, bot: 'DesertStrike3D', mode: 'cloudflare-edge', ts: Date.now() });
     }
