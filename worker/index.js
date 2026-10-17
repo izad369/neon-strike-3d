@@ -29,9 +29,15 @@ export class SignalRoom {
     const now = Date.now();
     await this.sweep(now);
 
+    // v3.9.1 — 90s was too tight: a background-throttled host tab (Chrome
+    // intensive throttling = 1 timer/min) or a phone with the screen off let
+    // the heartbeat go stale, so joiners got "Match not found" even though
+    // the host lobby was alive. 4 min tolerates a couple of missed polls.
+    const HOST_TTL = 240000;
+
     if (action === 'host') {
       const host = await this.ctx.storage.get('host');
-      if (typeof host === 'number' && now - host < 90000) {
+      if (typeof host === 'number' && now - host < HOST_TTL) {
         return Response.json({ ok: false, taken: true });
       }
       // fresh room: wipe whatever is left from the previous occupant
@@ -43,7 +49,23 @@ export class SignalRoom {
     }
 
     const host = await this.ctx.storage.get('host');
-    const hostActive = typeof host === 'number' && now - host < 90000;
+    const hostActive = typeof host === 'number' && now - host < HOST_TTL;
+
+    if (action === 'heartbeat') {
+      // lightweight host keep-alive — refresh the claim without a full re-claim
+      if (!hostActive) return Response.json({ ok: false, reason: 'no-room' });
+      await this.ctx.storage.put('host', now);
+      return Response.json({ ok: true });
+    }
+
+    if (action === 'status') {
+      // diagnostics only — timing + counters, no payloads
+      let joiners = 0;
+      for (const [, v] of await this.ctx.storage.list({ prefix: 'joiner:' })) {
+        if (typeof v === 'number' && now - v < 300000) joiners++;
+      }
+      return Response.json({ ok: true, hostActive, hostAgeMs: typeof host === 'number' ? now - host : null, joiners, now });
+    }
 
     if (action === 'join') {
       if (!hostActive) return Response.json({ ok: false, reason: 'no-room' });
@@ -111,7 +133,7 @@ const SIGNAL_CORS = {
 
 async function handleSignal(request, url, env) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: SIGNAL_CORS });
-  const m = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/(host|join|offer|offers|answer)$/);
+  const m = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/(host|join|offer|offers|answer|heartbeat|status)$/);
   if (!m) return new Response(JSON.stringify({ ok: false, reason: 'bad-path' }),
     { status: 404, headers: { ...SIGNAL_CORS, 'content-type': 'application/json' } });
   const ns = env && env.ROOM;
