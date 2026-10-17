@@ -25,8 +25,23 @@ export interface ClientHooks {
 // Public STUN so peers behind different NATs can find each other.
 // Cloudflare STUN lives on the same edge as the game itself (reachable
 // wherever the page loads); Google STUN stays as a backup.
+// v3.9.2 — added free public TURN relay (metered.ca OpenRelay) so peers on
+// UDP-restricted networks (mobile carriers, censoring ISPs) can still
+// connect: TURN/TCP 443 traverses almost every firewall. One side relaying
+// is enough for the pair to connect.
 const ICE: RTCConfiguration = {
-  iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }],
+  iceServers: [
+    { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80?transport=udp',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turns:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
 };
 
 const DATA_CHANNEL = 'ns3d';
