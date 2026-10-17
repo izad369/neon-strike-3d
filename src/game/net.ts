@@ -46,7 +46,11 @@ const ICE: RTCConfiguration = {
 
 const DATA_CHANNEL = 'ns3d';
 const POLL_MS = 1200;
-const ANSWER_TIMEOUT_MS = 20000;
+// v3.9.2 — 20s was too short: a mobile host page freezes the moment the user
+// switches apps (e.g. to the chat to share the room code) and only wakes when
+// they return to the tab. Offers live 300s server-side, so the joiner now
+// waits just as long — the handshake completes the moment the host wakes up.
+const ANSWER_TIMEOUT_MS = 300000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
