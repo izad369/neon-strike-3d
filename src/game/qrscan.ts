@@ -24,10 +24,22 @@ export class QrScanner {
         audio: false,
       });
     } catch (e) {
+      // v3.10 — honest, actionable errors. The classic case inside the Android
+      // APK: the WebView never forwards the permission prompt to Android, so
+      // getUserMedia dies with NotAllowedError without the user ever being
+      // asked. That is a wrapper bug (needs onPermissionRequest) — say so and
+      // point at the paste fallback instead of a useless "access denied".
       const name = (e as Error)?.name || '';
-      onErr(name === 'NotAllowedError'
-        ? 'Camera permission denied — paste the code instead.'
-        : 'Camera unavailable — paste the code instead.');
+      const secure = typeof isSecureContext !== 'undefined' ? isSecureContext : true;
+      if (name === 'NotAllowedError') {
+        onErr('Camera blocked with no permission prompt — the APK wrapper must grant it (see APK-SETUP.md). Paste the code instead.');
+      } else if (!secure) {
+        onErr('Camera needs an https page — paste the code instead.');
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        onErr('No usable camera on this device — paste the code instead.');
+      } else {
+        onErr('Camera unavailable — paste the code instead.');
+      }
       return;
     }
     this.video = video;

@@ -46,6 +46,43 @@ const ICE: RTCConfiguration = {
 
 const DATA_CHANNEL = 'ns3d';
 const POLL_MS = 1200;
+
+// v3.10 — signaling endpoint override. By default the game talks to its own
+// origin (/signal/...). On hosts where THAT origin is blocked (e.g. workers.dev
+// is filtered in Iran but the GitHub Pages mirror is not), a ?signal=<base-url>
+// URL parameter — persisted to localStorage — repoints all signaling at any
+// reachable mirror of this worker. CORS is already open on /signal/*.
+let SB: string | null = null;
+export function signalBase(): string {
+  if (SB !== null) return SB;
+  SB = '';
+  try {
+    const q = new URLSearchParams(location.search).get('signal');
+    if (q !== null) {
+      SB = q.trim().replace(/\/+$/, '');
+      try {
+        if (SB) localStorage.setItem('ns_signal_base', SB);
+        else localStorage.removeItem('ns_signal_base');
+      } catch { /* storage blocked */ }
+      return SB;
+    }
+    const s = localStorage.getItem('ns_signal_base');
+    if (s) SB = s.replace(/\/+$/, '');
+  } catch { /* storage blocked */ }
+  return SB;
+}
+
+// v3.10 — same-WiFi auto-discovery: live rooms whose HOST shares this device's
+// public IP (same router / same mobile line). Server matches on a salted IP
+// hash — no IP is ever exposed, no permissions needed, works in the APK too.
+export async function fetchNearby(): Promise<{ code: string; players: number }[]> {
+  const res = await fetch(signalBase() + '/signal/nearby', { headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error('nearby http ' + res.status);
+  const r = await res.json() as { ok?: boolean; rooms?: { code?: unknown; players?: unknown }[] };
+  return (r.rooms || []).filter(x =>
+    x && typeof x.code === 'string' && /^[A-Z0-9]{4,8}$/.test(x.code)
+  ).map(x => ({ code: x.code as string, players: Math.max(1, Math.min(16, Number(x.players) || 1)) }));
+}
 // v3.9.2 — 20s was too short: a mobile host page freezes the moment the user
 // switches apps (e.g. to the chat to share the room code) and only wakes when
 // they return to the tab. Offers live 300s server-side, so the joiner now
@@ -57,7 +94,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function signal<T = Record<string, unknown>>(code: string, path: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
-  const res = await fetch('/signal/' + encodeURIComponent(code) + '/' + path, {
+  const res = await fetch(signalBase() + '/signal/' + encodeURIComponent(code) + '/' + path, {
     method,
     headers: body ? { 'content-type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,

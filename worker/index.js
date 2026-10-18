@@ -21,12 +21,22 @@
 //               POST /signal/<code>/answer      -> {id, sdp}
 // Plain HTTPS only — reachable anywhere the game page itself is reachable.
 export class SignalRoom {
-  constructor(ctx, env) { this.ctx = ctx; }
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+    this.roomCode = '';
+    this.iph = '';
+    this.lastAnnounce = 0;
+  }
 
   async fetch(request) {
     const url = new URL(request.url);
     const action = url.pathname.slice(1);
     const now = Date.now();
+    // v3.10 — the edge worker forwards the room code + hashed public IP of the
+    // caller so this room can feed the same-WiFi discovery directory.
+    this.roomCode = request.headers.get('x-ns3d-code') || this.roomCode;
+    this.iph = request.headers.get('x-ns3d-iph') || this.iph;
     await this.sweep(now);
 
     // v3.9.1 — 90s was too tight: a background-throttled host tab (Chrome
@@ -86,6 +96,7 @@ export class SignalRoom {
 
     if (action === 'offers' && request.method === 'GET') {
       await this.ctx.storage.put('host', now); // polling = host heartbeat
+      await this.announceNearby(now); // v3.10 — keep the same-WiFi directory fresh
       const after = Number(url.searchParams.get('after') || 0) || 0;
       const offers = [];
       for (const [k, v] of await this.ctx.storage.list({ prefix: 'o:' })) {
@@ -115,12 +126,73 @@ export class SignalRoom {
     return Response.json({ ok: false, reason: 'bad-action' }, { status: 404 });
   }
 
+  // v3.10 — same-WiFi auto-discovery: every ~5 s the live host reports
+  // (room code, player count) to the global Directory DO, tagged with the
+  // salted hash of its public IP. Joiners querying /signal/nearby from the
+  // SAME public IP (same router / same mobile line) then see the room listed
+  // with zero setup. Best-effort: any directory failure is swallowed.
+  async announceNearby(now) {
+    if (!this.env || !this.env.DIRECTORY || !this.roomCode || !this.iph) return;
+    if (now - this.lastAnnounce < 5000) return;
+    this.lastAnnounce = now;
+    try {
+      let players = 1;
+      for (const [, v] of await this.ctx.storage.list({ prefix: 'joiner:' })) {
+        if (typeof v === 'number' && now - v < 300000) players++;
+      }
+      const dir = this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName('global'));
+      await dir.fetch('https://dir/announce?ip=' + encodeURIComponent(this.iph) +
+        '&code=' + encodeURIComponent(this.roomCode) + '&players=' + players);
+    } catch { /* directory is optional */ }
+  }
+
   async sweep(now) {
     for (const [k, v] of await this.ctx.storage.list()) {
       if (k === 'seq') continue; // plain counter, not a timestamp
       const ts = (v && typeof v === 'object') ? v.ts : v;
       if (typeof ts === 'number' && now - ts > 600000) await this.ctx.storage.delete(k);
     }
+  }
+}
+
+// v3.10 — global room directory for "same Wi-Fi" auto-discovery.
+// One DO ('global') keeps entries keyed by  <ipHash>:<CODE>  so rooms are only
+// ever visible to devices behind the SAME public IP — i.e. players on the
+// same router (or the same carrier CGNAT). Entries live 45 s; a frozen or
+// backgrounded host simply stops announcing and drops off the list, exactly
+// matching the room's real availability. No native code, no permissions.
+export class Directory {
+  constructor(ctx, env) { this.ctx = ctx; }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const ip = url.searchParams.get('ip') || '';
+    const now = Date.now();
+    if (url.pathname === '/announce') {
+      const code = (url.searchParams.get('code') || '').toUpperCase();
+      const players = Math.max(1, Math.min(16, Number(url.searchParams.get('players')) || 1));
+      if (!/^[A-Z0-9]{4,8}$/.test(code) || !/^[0-9a-f]{1,40}$/.test(ip)) {
+        return Response.json({ ok: false });
+      }
+      await this.ctx.storage.put(ip + ':' + code, { code, players, ts: now });
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === '/query') {
+      if (!ip) return Response.json({ ok: true, rooms: [] });
+      const rooms = [];
+      const stale = [];
+      for (const [k, v] of await this.ctx.storage.list({ prefix: ip + ':' })) {
+        if (!v || typeof v !== 'object' || typeof v.ts !== 'number' || now - v.ts > 45000) {
+          stale.push(k);
+          continue;
+        }
+        rooms.push({ code: v.code, players: v.players, ageMs: now - v.ts });
+      }
+      if (stale.length) await this.ctx.storage.delete(stale);
+      rooms.sort((a, b) => (b.players - a.players) || (a.ageMs - b.ageMs));
+      return Response.json({ ok: true, rooms: rooms.slice(0, 6) });
+    }
+    return Response.json({ ok: false }, { status: 404 });
   }
 }
 
@@ -131,18 +203,53 @@ const SIGNAL_CORS = {
   'cache-control': 'no-store',
 };
 
+// salted hash of the caller's public IP — we never store the IP itself, only
+// this short digest, and equality of two digests is all the directory needs.
+async function ipHash(request) {
+  try {
+    const ip = (request.headers.get('cf-connecting-ip') || 'unknown').trim();
+    const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ns3d-dir-v1|' + ip));
+    return Array.from(new Uint8Array(h)).slice(0, 10).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return 'unknown'; }
+}
+
+function corsJson(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...SIGNAL_CORS, 'content-type': 'application/json' },
+  });
+}
+
 async function handleSignal(request, url, env) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: SIGNAL_CORS });
+  const dir = env && env.DIRECTORY ? env.DIRECTORY : null;
+
+  // v3.10 — same-WiFi auto-discovery: list live rooms announced by hosts that
+  // share this caller's public IP. Everyone on one router sees each other's
+  // rooms instantly — no code typing, no QR, no native APIs.
+  if (url.pathname === '/signal/nearby' && request.method === 'GET') {
+    if (!dir) return corsJson({ ok: false, reason: 'no-binding' }, 500);
+    const stub = dir.get(dir.idFromName('global'));
+    const r = await stub.fetch('https://dir/query?ip=' + encodeURIComponent(await ipHash(request)));
+    const out = new Response(r.body, r);
+    for (const [k, v] of Object.entries(SIGNAL_CORS)) out.headers.set(k, v);
+    return out;
+  }
+
   const m = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/(host|join|offer|offers|answer|heartbeat|status)$/);
-  if (!m) return new Response(JSON.stringify({ ok: false, reason: 'bad-path' }),
-    { status: 404, headers: { ...SIGNAL_CORS, 'content-type': 'application/json' } });
+  if (!m) return corsJson({ ok: false, reason: 'bad-path' }, 404);
   const ns = env && env.ROOM;
   const room = ns ? ns.get(ns.idFromName(m[1].toUpperCase())) : null;
-  if (!room) return new Response(JSON.stringify({ ok: false, reason: 'no-binding' }),
-    { status: 500, headers: { ...SIGNAL_CORS, 'content-type': 'application/json' } });
+  if (!room) return corsJson({ ok: false, reason: 'no-binding' }, 500);
+  const fwdHeaders = {
+    'x-ns3d-code': m[1].toUpperCase(),
+    'x-ns3d-iph': await ipHash(request),
+  };
+  const ct = request.headers.get('content-type');
+  if (ct) fwdHeaders['content-type'] = ct;
   const resp = await room.fetch(new Request('https://room/' + m[2] + (url.search || ''), {
     method: request.method,
-    headers: request.headers.get('content-type') ? { 'content-type': request.headers.get('content-type') } : undefined,
+    headers: fwdHeaders,
     body: request.method === 'POST' ? await request.text() : undefined,
   }));
   const out = new Response(resp.body, resp);
@@ -196,6 +303,7 @@ function askAnswer(q) {
   if (has('multiplayer', 'online', 'friend', 'room', 'p2p', 'server', 'wifi', 'wi-fi', 'lan')) return [
     '**Online multiplayer** is peer-to-peer (WebRTC). Signaling runs on this game server itself \u2014 no third-party service.',
     'Host: PLAY ONLINE \u2192 CREATE \u2192 share the 5-letter room code. Friends: PLAY ONLINE \u2192 JOIN + code.',
+    '**NEW v3.10 — same-line auto-find:** on the join screen, rooms hosted on the SAME Wi-Fi / line appear automatically — just tap to join, no code typing.',
     '**NEW v3.8 \u2014 LAN mode with ZERO internet:** PLAY ONLINE \u2192 Host on Wi-Fi (LAN) / Join on Wi-Fi (LAN).',
     'Same Wi-Fi only: host shows a QR code (or copy-paste code), friend scans, sends the answer back, done.',
     'The host\u2019s phone/browser is the authority; snapshots sync at 12 Hz.',

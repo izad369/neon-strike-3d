@@ -1018,6 +1018,7 @@ class Game {
     this.client = new NetClient({
       onOpen: () => {
         this.client!.send({ t: 'hi', name });
+        this.menus.setLobby(this.clientRoom, 1); // v3.10 — count yourself, don't show 0
         this.menus.setLobbyNote('Connected! Waiting for the host to start...');
       },
       onMsg: (msg) => this.onClientMsg(msg),

@@ -7,6 +7,7 @@ import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE,
 import { loadCareer, modeLabel, fmtWhen, clearCareerStats, type Career } from './stats';
 import { drawQr } from './qr';
 import { QrScanner } from './qrscan';
+import { fetchNearby } from './net';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help' | 'career' | 'lan-host' | 'lan-join';
 
@@ -43,6 +44,11 @@ export class Menus {
   private lobbyNoteEl!: HTMLElement;
   private statusEl!: HTMLElement;
   private onlineStatusEl!: HTMLElement;
+  // v3.10 — same-WiFi auto-discovery (online panel)
+  private nearbyListEl!: HTMLElement;
+  private nearbyRefreshBtn!: HTMLButtonElement;
+  private nearbyTimer: number | null = null;
+  private nearbySig = '';
   private endBoardEl!: HTMLElement;
   private endTitleEl!: HTMLElement;
   private endSubEl!: HTMLElement;
@@ -295,6 +301,10 @@ export class Menus {
         <div class="ns-row"><input class="ns-input ns-code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase; letter-spacing:6px; text-align:center" /></div>
       </div>
       <button class="ns-btn ns-join">Join Match</button>
+      <div class="ns-field ns-nearby-field" style="margin-top:18px"><label>Same Wi-Fi or same line? Live rooms auto-appear here:</label>
+        <div class="ns-nearby-list"><div class="ns-nearby-none">Searching…</div></div>
+        <button class="ns-btn small ns-nearby-refresh">Refresh list</button>
+      </div>
       <div class="ns-field" style="margin-top:18px"><label>Same Wi-Fi only — works with NO internet:</label>
         <button class="ns-btn ns-lan">Host on Wi-Fi (LAN)</button>
         <button class="ns-btn ns-lan-join">Join on Wi-Fi (LAN)</button>
@@ -305,6 +315,9 @@ export class Menus {
     </div>`);
     this.codeInput = p.querySelector('.ns-code')!;
     this.onlineStatusEl = p.querySelector('.ns-online-status')!;
+    this.nearbyListEl = p.querySelector('.ns-nearby-list') as HTMLElement;
+    this.nearbyRefreshBtn = p.querySelector('.ns-nearby-refresh') as HTMLButtonElement;
+    this.nearbyRefreshBtn.addEventListener('click', () => void this.refreshNearby());
     // host gameplay selection: DM / TDM / BR (+ map, hidden for BR)
     const modeSeg = this.el(`<div class="ns-seg ns-hostmode-seg">
       <button data-m="dm" class="on">DEATHMATCH</button><button data-m="tdm">TEAM DEATHMATCH</button><button data-m="br">BATTLE ROYALE</button>
@@ -553,6 +566,49 @@ export class Menus {
     else this.lanJoinStatusEl.classList.remove('err');
   }
 
+  // ---- v3.10 same-WiFi auto-discovery -------------------------------------
+  // While the ONLINE panel is open the list re-polls every 4 s, so a friend
+  // who creates a room on the same router shows up here with zero typing.
+  // Re-render is skipped when nothing changed so taps can never be eaten by
+  // a background refresh.
+  private async refreshNearby() {
+    if (!this.nearbyListEl) return;
+    let rooms: { code: string; players: number }[] = [];
+    let failed = false;
+    try { rooms = await fetchNearby(); } catch { failed = true; }
+    const sig = failed ? 'ERR' : rooms.map(r => r.code + ':' + r.players).join('|');
+    if (sig === this.nearbySig) return; // nothing changed — keep the DOM stable
+    this.nearbySig = sig;
+    const list = this.nearbyListEl;
+    list.innerHTML = '';
+    if (failed) {
+      list.appendChild(this.el('<div class="ns-nearby-none">Could not search (network). Typing the room code still works.</div>'));
+      return;
+    }
+    if (!rooms.length) {
+      list.appendChild(this.el('<div class="ns-nearby-none">No live room on your line right now. Create one — friends on this Wi-Fi will see it here automatically.</div>'));
+      return;
+    }
+    for (const r of rooms) {
+      const b = this.el(`<button class="ns-btn small ns-nearby-room">${esc(r.code)}&nbsp;&nbsp;·&nbsp;&nbsp;${r.players} ${r.players === 1 ? 'player' : 'players'} &nbsp;— TAP TO JOIN</button>`);
+      b.addEventListener('click', () => {
+        this.codeInput.value = r.code;
+        this.cb.onJoin(this.playerName(), r.code);
+      });
+      list.appendChild(b);
+    }
+  }
+
+  private startNearbyPoll() {
+    this.stopNearbyPoll();
+    void this.refreshNearby();
+    this.nearbyTimer = window.setInterval(() => void this.refreshNearby(), 4000);
+  }
+
+  private stopNearbyPoll() {
+    if (this.nearbyTimer !== null) { clearInterval(this.nearbyTimer); this.nearbyTimer = null; }
+  }
+
   private buildLobby() {
     const p = this.el(`<div>
       <div class="ns-panel-title">MATCH LOBBY</div>
@@ -750,11 +806,25 @@ export class Menus {
   }
 
   loadName() {
-    const saved = localStorage.getItem('ns_name');
+    // v3.10 — survive APK WebViews with DOM storage disabled: localStorage →
+    // cookie → the career record (which already redundantly stores the name).
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('ns_name'); } catch { /* storage blocked */ }
+    if (!saved) {
+      try {
+        const m = document.cookie.match(/(?:^|;\s*)ns_name=([^;]*)/);
+        if (m) saved = decodeURIComponent(m[1]);
+      } catch { /* blocked */ }
+    }
+    if (!saved) { try { saved = loadCareer().name || null; } catch { /* blocked */ } }
     if (saved) this.nameInput.value = saved;
     else this.nameInput.value = 'PLAYER' + Math.floor(100 + Math.random() * 900);
   }
-  saveName() { localStorage.setItem('ns_name', this.playerName()); }
+  saveName() {
+    const n = this.playerName();
+    try { localStorage.setItem('ns_name', n); } catch { /* storage blocked */ }
+    try { document.cookie = 'ns_name=' + encodeURIComponent(n) + ';max-age=31536000;path=/;SameSite=Lax'; } catch { /* blocked */ }
+  }
 
   show(panel: MenuPanel | null) {
     // NOTE: classList.add/remove fire MutationObserver records even when they are
@@ -764,11 +834,14 @@ export class Menus {
     if (panel === null) {
       if (!this.wrap.classList.contains('ns-hidden')) this.wrap.classList.add('ns-hidden');
       this.stopScrollRepeat();
+      this.stopNearbyPoll();
       return;
     }
     if (this.wrap.classList.contains('ns-hidden')) this.wrap.classList.remove('ns-hidden');
     Object.entries(this.panels).forEach(([k, el]) => el.classList.toggle('ns-hidden', k !== panel));
     if (panel === 'career') this.renderCareer(); // refresh stats every time it opens
+    if (panel === 'online') this.startNearbyPoll(); // v3.10 — auto-find while the panel is open
+    else this.stopNearbyPoll();
     this.updateScrollNav();
   }
   isVisible(): boolean { return !this.wrap.classList.contains('ns-hidden'); }

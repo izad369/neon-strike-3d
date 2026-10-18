@@ -191,6 +191,11 @@ export function injectStyles() {
 .ns-code-box { font-family: 'Black Ops One', sans-serif; font-size: 42px; letter-spacing: 10px; color: #cdb27a;
   text-shadow: 0 2px 3px rgba(0,0,0,0.6); background: rgba(30,26,18,0.9); border: 1px dashed #b3a077; border-radius: 8px; padding: 14px 10px 10px; margin: 12px 0; }
 .ns-code-hint { font-size: 13px; color: #a08f6f; margin-bottom: 14px; line-height: 1.5; }
+/* ---- v3.10 same-WiFi auto-discovery (online panel) ---- */
+.ns-nearby-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+.ns-nearby-list .ns-btn { margin: 0; border-color: #7d8f4e; }
+.ns-nearby-list .ns-btn:hover { border-color: #d6b96a; }
+.ns-nearby-none { font-size: 13px; color: #9db38a; line-height: 1.45; padding: 2px 0 4px; }
 /* ---- LAN (Wi-Fi) panels ---- */
 .ns-code-area { width: 100%; padding: 9px 12px; background: rgba(30,26,18,0.92); border: 1px solid #6b5d43; border-radius: 5px;
   color: #cdb27a; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5;
