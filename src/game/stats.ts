@@ -74,9 +74,33 @@ function memBackend(): Backend {
   };
 }
 
+// v3.11 — APK native bridge (SharedPreferences): survives the APK's
+// ephemeral localhost port that resets localStorage every launch.
+function nativeBackend(): Backend {
+  return {
+    name: 'AndroidBridge',
+    read: () => {
+      try {
+        const b = (globalThis as unknown as { AndroidBridge?: { nsLoad?: (k: string) => string | null } }).AndroidBridge;
+        const v = b?.nsLoad?.(KEY);
+        return v == null || v === '' ? null : v;
+      } catch { return null; }
+    },
+    write: (s) => {
+      try {
+        const b = (globalThis as unknown as { AndroidBridge?: { nsSave?: (k: string, v: string) => void } }).AndroidBridge;
+        if (!b || typeof b.nsSave !== 'function') return false;
+        b.nsSave(KEY, s);
+        return true;
+      } catch { return false; }
+    },
+  };
+}
+
 function backends(): Backend[] {
   const list: Backend[] = [];
   try { if (typeof localStorage !== 'undefined') list.push(lsBackend()); } catch { /* blocked */ }
+  try { list.push(nativeBackend()); } catch { /* no bridge */ }
   try { if (typeof document !== 'undefined' && document.cookie !== undefined) list.push(cookieBackend()); } catch { /* blocked */ }
   list.push(memBackend());
   return list;

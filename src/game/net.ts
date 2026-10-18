@@ -6,6 +6,50 @@
 // Gameplay: raw WebRTC DataChannel between peers, host authoritative.
 import { LanConn } from './lan';
 import { makeRoomCode, ClientMsg, HostMsg } from './constants';
+import { NS_ICE, DATA_CHANNEL, gatherComplete } from './rtc';
+import { MqttHost, MqttClient as MqttClientImpl, mqttNearbyScan } from './mqtt';
+import { storeGet, storeSet, storeDel } from './store';
+
+// v3.11 — public-MQTT relay re-exports (menus.ts scans the relay directory
+// when the REST nearby endpoint is unreachable, e.g. on filtered origins).
+export { mqttNearbyScan };
+export type { RelayRoom } from './mqtt';
+
+// ---- transport selection --------------------------------------------------
+// The REST mailbox on workers.dev is SNI-filtered in some countries (Iran).
+// pickMode() probes it once per page load; on failure every session switches
+// to the public MQTT relay automatically. ?mqtt=1 / ?mqtt=0 force a mode;
+// the last working mode is remembered in localStorage.
+export type SignalMode = 'rest' | 'mqtt';
+let modeMemo: SignalMode | null = null;
+
+export async function restHealthy(timeoutMs = 3500): Promise<boolean> {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
+    const r = await fetch(signalBase() + '/signal/health', { signal: ctl.signal, headers: { accept: 'application/json' } });
+    clearTimeout(t);
+    return r.ok;
+  } catch { return false; }
+}
+
+export async function pickMode(): Promise<SignalMode> {
+  try {
+    const f = new URLSearchParams(location.search).get('mqtt');
+    if (f === '1') return 'mqtt';
+    if (f === '0') return 'rest';
+    if (storeGet('ns_mqtt') === '1') return 'mqtt';
+  } catch { /* storage blocked */ }
+  if (modeMemo) return modeMemo;
+  modeMemo = (await restHealthy()) ? 'rest' : 'mqtt';
+  if (modeMemo === 'mqtt') rememberMqtt();
+  return modeMemo;
+}
+
+function rememberMqtt() {
+  modeMemo = 'mqtt';
+  try { storeSet('ns_mqtt', '1'); } catch { /* blocked */ }
+}
 
 export interface HostHooks {
   onOpen(code: string): void;
@@ -22,29 +66,8 @@ export interface ClientHooks {
   onClosed(): void;
 }
 
-// Public STUN so peers behind different NATs can find each other.
-// Cloudflare STUN lives on the same edge as the game itself (reachable
-// wherever the page loads); Google STUN stays as a backup.
-// v3.9.2 — added free public TURN relay (metered.ca OpenRelay) so peers on
-// UDP-restricted networks (mobile carriers, censoring ISPs) can still
-// connect: TURN/TCP 443 traverses almost every firewall. One side relaying
-// is enough for the pair to connect.
-const ICE: RTCConfiguration = {
-  iceServers: [
-    { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
-    {
-      urls: [
-        'turn:openrelay.metered.ca:80?transport=udp',
-        'turn:openrelay.metered.ca:443?transport=tcp',
-        'turns:openrelay.metered.ca:443?transport=tcp',
-      ],
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-  ],
-};
-
-const DATA_CHANNEL = 'ns3d';
+// (ICE + data-channel name + ICE-gather helper live in ./rtc so both
+// transports — REST mailbox and public MQTT relay — stay identical)
 const POLL_MS = 1200;
 
 // v3.10 — signaling endpoint override. By default the game talks to its own
@@ -61,12 +84,12 @@ export function signalBase(): string {
     if (q !== null) {
       SB = q.trim().replace(/\/+$/, '');
       try {
-        if (SB) localStorage.setItem('ns_signal_base', SB);
-        else localStorage.removeItem('ns_signal_base');
+        if (SB) storeSet('ns_signal_base', SB);
+        else storeDel('ns_signal_base');
       } catch { /* storage blocked */ }
       return SB;
     }
-    const s = localStorage.getItem('ns_signal_base');
+    const s = storeGet('ns_signal_base');
     if (s) SB = s.replace(/\/+$/, '');
   } catch { /* storage blocked */ }
   return SB;
@@ -103,32 +126,39 @@ async function signal<T = Record<string, unknown>>(code: string, path: string, m
   return res.json() as Promise<T>;
 }
 
-/** resolve after ICE gathering finishes (or timeout — keep the handshake snappy) */
-function gatherComplete(pc: RTCPeerConnection, ms = 2500): Promise<void> {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise(res => {
-    const done = () => { pc.removeEventListener('icegatheringstatechange', on); clearTimeout(t); res(); };
-    const on = () => { if (pc.iceGatheringState === 'complete') done(); };
-    const t = setTimeout(done, ms);
-    pc.addEventListener('icegatheringstatechange', on);
-  });
-}
-
 // ---- host ----------------------------------------------------------------
 
 export class NetHost {
   code = '';
-  conns: LanConn[] = [];
+  private restConns: LanConn[] = [];
   private pcs: RTCPeerConnection[] = [];
   private lastSeq = 0;
   private polling = false;
   private retried = false;
+  private mqtt: MqttHost | null = null;
+  private mqttTried = false;
 
   constructor(private hooks: HostHooks) {}
 
+  /** live peer connections (REST mailbox or MQTT relay transport) */
+  get conns(): LanConn[] { return this.mqtt ? this.mqtt.conns : this.restConns; }
+
   start() {
     this.code = makeRoomCode();
+    void this.boot();
+  }
+
+  private async boot() {
+    if (await pickMode() === 'mqtt') {
+      await this.startMqtt();
+      return;
+    }
     void this.register();
+  }
+
+  private async startMqtt() {
+    this.mqtt = new MqttHost(this.hooks);
+    await this.mqtt.start(this.code);
   }
 
   private async register() {
@@ -148,6 +178,14 @@ export class NetHost {
       }
       this.hooks.onError('Could not create the room — try again.');
     } catch {
+      // server unreachable (filtered origin / dead edge) — fall back to the
+      // public MQTT relay once before surfacing the error for real
+      if (!this.mqttTried) {
+        this.mqttTried = true;
+        rememberMqtt();
+        await this.startMqtt();
+        return;
+      }
       this.hooks.onError('Network error — could not create the room. Check your connection.');
     }
   }
@@ -169,20 +207,20 @@ export class NetHost {
 
   private async accept(joinerId: string, offerSdp: string) {
     try {
-      const pc = new RTCPeerConnection(ICE);
+      const pc = new RTCPeerConnection(NS_ICE);
       this.pcs.push(pc);
       // the JOINER is the offerer and owns the data channel — it arrives here
       // as soon as the remote offer is applied
       pc.ondatachannel = (e) => {
         const conn = new LanConn(pc, e.channel);
         conn.onOpen(() => {
-          if (!this.conns.includes(conn)) {
-            this.conns.push(conn);
+          if (!this.restConns.includes(conn)) {
+            this.restConns.push(conn);
             this.hooks.onPeerJoin(conn);
           }
         });
         conn.onClose(() => {
-          this.conns = this.conns.filter(c => c !== conn);
+          this.restConns = this.restConns.filter(c => c !== conn);
           this.hooks.onPeerLeave(conn);
         });
         conn.onData(d => this.hooks.onMsg(conn, d as ClientMsg));
@@ -208,8 +246,10 @@ export class NetHost {
 
   destroy() {
     this.polling = false;
-    this.conns.forEach(c => c.close());
-    this.conns = [];
+    this.mqtt?.destroy();
+    this.mqtt = null;
+    this.restConns.forEach(c => c.close());
+    this.restConns = [];
     this.pcs.forEach(pc => { try { pc.close(); } catch { /* */ } });
     this.pcs = [];
   }
@@ -221,11 +261,26 @@ export class NetClient {
   private pc: RTCPeerConnection | null = null;
   private conn: LanConn | null = null;
   private dead = false;
+  private mqtt: MqttClientImpl | null = null;
+  private mqttTried = false;
 
   constructor(private hooks: ClientHooks) {}
 
   connect(code: string) {
-    void this.join(code.toUpperCase().trim());
+    void this.boot(code.toUpperCase().trim());
+  }
+
+  private async boot(code: string) {
+    if (await pickMode() === 'mqtt') {
+      this.joinMqtt(code);
+      return;
+    }
+    void this.join(code);
+  }
+
+  private joinMqtt(code: string) {
+    this.mqtt = new MqttClientImpl(this.hooks);
+    this.mqtt.connect(code);
   }
 
   private async join(code: string) {
@@ -238,7 +293,7 @@ export class NetClient {
           : 'Could not join the room — try again.');
         return;
       }
-      const pc = new RTCPeerConnection(ICE);
+      const pc = new RTCPeerConnection(NS_ICE);
       this.pc = pc;
       // the offerer owns the data channel — without it the offer SDP has no
       // m= section and the host cannot answer it
@@ -269,14 +324,26 @@ export class NetClient {
         this.hooks.onError('Could not reach the host — the room may have expired. Get a fresh code.');
       }
     } catch {
+      // server unreachable — fall back to the public MQTT relay once
+      if (!this.dead && !this.mqttTried) {
+        this.mqttTried = true;
+        rememberMqtt();
+        this.joinMqtt(code);
+        return;
+      }
       if (!this.dead) this.hooks.onError('Network error — check your internet connection.');
     }
   }
 
-  send(msg: ClientMsg) { this.conn?.send(msg); }
+  send(msg: ClientMsg) {
+    if (this.mqtt) { this.mqtt.send(msg); return; }
+    this.conn?.send(msg);
+  }
 
   destroy() {
     this.dead = true;
+    this.mqtt?.destroy();
+    this.mqtt = null;
     try { this.conn?.close(); } catch { /* */ }
     try { this.pc?.close(); } catch { /* */ }
     this.conn = null;

@@ -8,14 +8,16 @@ const JOY_RADIUS = 56;                 // px, max knob travel
 const TAP_MS = 200;                    // tap-on-look-zone fires a single shot
 const TAP_MOVE = 14;                   // px of drift still counted as a tap
 
+import { storeGet, storeSet } from './store';
+
 export type TouchMode = 'auto' | 'on' | 'off';
 const STORE_KEY = 'ns_touch_mode';
 
 export function touchModePref(): TouchMode {
-  const v = localStorage.getItem(STORE_KEY);
+  const v = storeGet(STORE_KEY);
   return v === 'on' || v === 'off' ? v : 'auto';
 }
-export function setTouchModePref(m: TouchMode) { localStorage.setItem(STORE_KEY, m); }
+export function setTouchModePref(m: TouchMode) { storeSet(STORE_KEY, m); }
 
 export function detectTouch(): boolean {
   try {

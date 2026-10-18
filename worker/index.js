@@ -224,6 +224,11 @@ async function handleSignal(request, url, env) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: SIGNAL_CORS });
   const dir = env && env.DIRECTORY ? env.DIRECTORY : null;
 
+  // v3.11 — cheap liveness probe: the client pings this once per page load to
+  // choose between REST signaling here and the public-MQTT relay (used when
+  // this origin is SNI-filtered, e.g. workers.dev in Iran).
+  if (url.pathname === '/signal/health') return corsJson({ ok: true, t: Date.now() });
+
   // v3.10 — same-WiFi auto-discovery: list live rooms announced by hosts that
   // share this caller's public IP. Everyone on one router sees each other's
   // rooms instantly — no code typing, no QR, no native APIs.
@@ -259,8 +264,8 @@ async function handleSignal(request, url, env) {
 
 const APP_PUBLIC_KEY = '8f16f09b4df7780805d4f0feb7543bdbd4dbc115ed18211a5c7d867691899a95';
 
-const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.8/DesertStrike3D-v3.8.apk';
-const APK_LOCAL_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v3.8-local/DesertStrike3D-Local-v3.8.apk';
+const APK_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v4.0/DesertStrike3D-v4.0.apk';
+const APK_LOCAL_URL = 'https://github.com/izad369/neon-strike-3d/releases/download/v4.0-local/DesertStrike3D-Local-v4.0.apk';
 const APK_SLITHER_URL = 'https://github.com/izad369/neon-slither-izad/releases/download/v1.0/NeonSlither-1.0.apk';
 const GAME_URL = 'https://neon-strike-3d.rezaei-reza1092.workers.dev/';
 const GAME_MIRROR_URL = 'https://izad369.github.io/neon-strike-3d/';
@@ -269,7 +274,7 @@ const SLITHER_MIRROR_URL = 'https://izad369.github.io/neon-slither-izad/';
 const HELP_TEXT = [
   '**DESERT STRIKE 3D** — command list',
   '\u2022 `/ping` \u2014 check I am alive',
-  '\u2022 `/apk` \u2014 latest Android APK (v3.8)',
+  '\u2022 `/apk` \u2014 latest Android APK (v4.0)',
   '\u2022 `/apk local` / `/apk slither` \u2014 Local edition / Neon Slither',
   '\u2022 `/ask <question>` \u2014 ask about the game (edge edition)',
   '\u2022 `/help` \u2014 this list',
@@ -279,7 +284,7 @@ const HELP_TEXT = [
 ].join('\n');
 
 const APK_TEXT = [
-  '\uD83D\uDD25 **DESERT STRIKE 3D v3.8** \u2014 Android APK:',
+  '\uD83D\uDD25 **DESERT STRIKE 3D v4.0** \u2014 Android APK:',
   APK_URL,
   '',
   '\uD83C\uDFEA **LOCAL edition** (offline only, separate app):',

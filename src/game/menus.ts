@@ -7,7 +7,8 @@ import { WEAPONS, KNIFE_INDEXES, PRIMARY_INDEXES, BACKUP_INDEXES, DEFAULT_KNIFE,
 import { loadCareer, modeLabel, fmtWhen, clearCareerStats, type Career } from './stats';
 import { drawQr } from './qr';
 import { QrScanner } from './qrscan';
-import { fetchNearby } from './net';
+import { fetchNearby, mqttNearbyScan } from './net';
+import { storeGet, storeSet } from './store';
 
 export type MenuPanel = 'main' | 'offline' | 'online' | 'lobby' | 'pause' | 'end' | 'help' | 'career' | 'lan-host' | 'lan-join';
 
@@ -48,7 +49,7 @@ export class Menus {
   private nearbyListEl!: HTMLElement;
   private nearbyRefreshBtn!: HTMLButtonElement;
   private nearbyTimer: number | null = null;
-  private nearbySig = '';
+  private nearbySig: string | null = null;
   private endBoardEl!: HTMLElement;
   private endTitleEl!: HTMLElement;
   private endSubEl!: HTMLElement;
@@ -575,7 +576,13 @@ export class Menus {
     if (!this.nearbyListEl) return;
     let rooms: { code: string; players: number }[] = [];
     let failed = false;
-    try { rooms = await fetchNearby(); } catch { failed = true; }
+    let relay = false;
+    try {
+      rooms = await fetchNearby();
+    } catch {
+      // REST nearby unreachable (filtered origin) — scan the MQTT relay dir
+      try { rooms = await mqttNearbyScan(); relay = true; } catch { failed = true; }
+    }
     const sig = failed ? 'ERR' : rooms.map(r => r.code + ':' + r.players).join('|');
     if (sig === this.nearbySig) return; // nothing changed — keep the DOM stable
     this.nearbySig = sig;
@@ -588,6 +595,9 @@ export class Menus {
     if (!rooms.length) {
       list.appendChild(this.el('<div class="ns-nearby-none">No live room on your line right now. Create one — friends on this Wi-Fi will see it here automatically.</div>'));
       return;
+    }
+    if (relay) {
+      list.appendChild(this.el('<div class="ns-nearby-none">Live rooms on the relay (works even where the game server is blocked):</div>'));
     }
     for (const r of rooms) {
       const b = this.el(`<button class="ns-btn small ns-nearby-room">${esc(r.code)}&nbsp;&nbsp;·&nbsp;&nbsp;${r.players} ${r.players === 1 ? 'player' : 'players'} &nbsp;— TAP TO JOIN</button>`);
@@ -661,7 +671,7 @@ export class Menus {
       seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
       const m = (b.dataset.m as TouchMode);
-      localStorage.setItem('ns_touch_mode', m);
+      storeSet('ns_touch_mode', m);
       this.cb.onTouchMode(m);
     }));
     const gfxSeg = p.querySelector('.ns-gfx-seg')!;
@@ -808,8 +818,10 @@ export class Menus {
   loadName() {
     // v3.10 — survive APK WebViews with DOM storage disabled: localStorage →
     // cookie → the career record (which already redundantly stores the name).
+    // v3.11 — storeGet also reads the native SharedPreferences bridge (the
+    // APK's ephemeral localhost port makes plain localStorage per-run only).
     let saved: string | null = null;
-    try { saved = localStorage.getItem('ns_name'); } catch { /* storage blocked */ }
+    try { saved = storeGet('ns_name'); } catch { /* storage blocked */ }
     if (!saved) {
       try {
         const m = document.cookie.match(/(?:^|;\s*)ns_name=([^;]*)/);
@@ -822,7 +834,7 @@ export class Menus {
   }
   saveName() {
     const n = this.playerName();
-    try { localStorage.setItem('ns_name', n); } catch { /* storage blocked */ }
+    try { storeSet('ns_name', n); } catch { /* storage blocked */ }
     try { document.cookie = 'ns_name=' + encodeURIComponent(n) + ';max-age=31536000;path=/;SameSite=Lax'; } catch { /* blocked */ }
   }
 

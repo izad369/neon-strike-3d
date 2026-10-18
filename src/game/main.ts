@@ -20,6 +20,7 @@ import { playerColor } from './avatar';
 import { WEAPONS, GUN_GAME_LADDER, BR_LOOT_GUNS, WeaponSpec } from './weapons';
 import { Loadout } from './menus';
 import { recordMatch, saveCareerName } from './stats';
+import { storeGet, storeSet } from './store';
 
 type Mode = 'offline' | 'host' | 'client';
 type State = 'menu' | 'lobby' | 'playing' | 'end';
@@ -268,7 +269,7 @@ class Game {
       // Manual override (ROT button): embedded webviews (Aippy etc.) have no
       // device tilt, so the auto direction can be wrong for the user's grip.
       try {
-        const pref = localStorage.getItem('ns_rot_flip');
+        const pref = storeGet('ns_rot_flip');
         if (pref === '0' || pref === '1') flip = pref === '1';
       } catch { /* private mode */ }
     }
@@ -286,7 +287,7 @@ class Game {
   /** ROT button (forced landscape): flip which way the picture is rotated, remember it */
   private toggleRotFlip() {
     const flipped = this.root.classList.contains('ns-forced-landscape-flip');
-    try { localStorage.setItem('ns_rot_flip', flipped ? '0' : '1'); } catch { /* private mode */ }
+    try { storeSet('ns_rot_flip', flipped ? '0' : '1'); } catch { /* private mode */ }
     this.applyLayout();
   }
 
