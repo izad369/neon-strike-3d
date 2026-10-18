@@ -1,3 +1,5 @@
+> ✅ **وضعیت (v4.0):** هر سه فیکس این سند حالا خودم روی APK اعمال و منتشر شده — [`DesertStrike3D-Local-v4.0.apk`](https://github.com/izad369/neon-strike-3d/releases/download/v4.0-local/DesertStrike3D-Local-v4.0.apk). این سند فقط به‌عنوان مرجع فنی می‌ماند.
+
 # راهنمای ساخت درست APK (نسخهٔ اندروید بازی Desert Strike 3D)
 
 این سند سه مشکلی که توی APK فعلی دیده شده رو ریشه‌ای حل می‌کنه:
