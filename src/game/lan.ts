@@ -46,6 +46,17 @@ export class LanConn {
     try { this.ch.close(); } catch { /* */ }
     try { this.pc.close(); } catch { /* */ }
   }
+
+  /** v3.12 — abandon a never-opened path without firing onClose (the game must
+   * not mistake a transport switch for a peer leaving) */
+  closeSilent() {
+    this.closeCbs = [];
+    this.openCbs = [];
+    this.dataCb = null;
+    this.open = false;
+    try { this.ch.close(); } catch { /* */ }
+    try { this.pc.close(); } catch { /* */ }
+  }
 }
 
 // ---- SDP <-> code helpers ------------------------------------------------

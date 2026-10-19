@@ -71,3 +71,4 @@ screenshots/
 Caddyfile
 /tests/
 components.json
+.wrangler/

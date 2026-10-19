@@ -8,6 +8,7 @@ import { LanConn } from './lan';
 import { makeRoomCode, ClientMsg, HostMsg } from './constants';
 import { NS_ICE, DATA_CHANNEL, gatherComplete } from './rtc';
 import { MqttHost, MqttClient as MqttClientImpl, mqttNearbyScan } from './mqtt';
+import { PeerConn, RelayConn, RelayHostSide, relayWsUrl } from './relay';
 import { storeGet, storeSet, storeDel } from './store';
 
 // v3.11 — public-MQTT relay re-exports (menus.ts scans the relay directory
@@ -53,9 +54,9 @@ function rememberMqtt() {
 
 export interface HostHooks {
   onOpen(code: string): void;
-  onPeerJoin(conn: LanConn): void;
-  onPeerLeave(conn: LanConn): void;
-  onMsg(conn: LanConn, msg: ClientMsg): void;
+  onPeerJoin(conn: PeerConn): void;
+  onPeerLeave(conn: PeerConn): void;
+  onMsg(conn: PeerConn, msg: ClientMsg): void;
   onError(err: string): void;
 }
 
@@ -112,8 +113,17 @@ export async function fetchNearby(): Promise<{ code: string; players: number }[]
 // waits just as long — the handshake completes the moment the host wakes up.
 const ANSWER_TIMEOUT_MS = 300000;
 
+// v3.12 — how long the joiner waits for the data channel to open after the
+// signaling handshake completed before giving up on raw WebRTC and switching
+// to the same-origin WebSocket relay (?relay=1 skips WebRTC entirely).
+const RELAY_AFTER_MS = 6000;
+
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
+}
+
+function forceRelay(): boolean {
+  try { return new URLSearchParams(location.search).get('relay') === '1'; } catch { return false; }
 }
 
 async function signal<T = Record<string, unknown>>(code: string, path: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
@@ -131,6 +141,8 @@ async function signal<T = Record<string, unknown>>(code: string, path: string, m
 export class NetHost {
   code = '';
   private restConns: LanConn[] = [];
+  private relayConns: PeerConn[] = [];
+  private relay: RelayHostSide | null = null;
   private pcs: RTCPeerConnection[] = [];
   private lastSeq = 0;
   private polling = false;
@@ -140,8 +152,14 @@ export class NetHost {
 
   constructor(private hooks: HostHooks) {}
 
-  /** live peer connections (REST mailbox or MQTT relay transport) */
-  get conns(): LanConn[] { return this.mqtt ? this.mqtt.conns : this.restConns; }
+  /** live peer connections (REST mailbox, WS relay or MQTT relay transport) */
+  get conns(): PeerConn[] {
+    if (this.mqtt) return this.mqtt.conns;
+    const all: PeerConn[] = [];
+    for (const c of this.restConns) all.push(c);
+    for (const c of this.relayConns) all.push(c);
+    return all;
+  }
 
   start() {
     this.code = makeRoomCode();
@@ -167,6 +185,7 @@ export class NetHost {
       if (r.ok) {
         this.polling = true;
         void this.pollLoop();
+        this.startRelayHost(); // v3.12 — listen on the WS relay alongside WebRTC
         this.hooks.onOpen(this.code);
         return;
       }
@@ -235,19 +254,41 @@ export class NetHost {
     }
   }
 
-  broadcast(msg: HostMsg, except?: LanConn) {
+  /** v3.12 — listen for relay-only joiners (WebRTC-dead networks) */
+  private startRelayHost() {
+    try {
+      this.relay = new RelayHostSide(relayWsUrl(this.code, signalBase()), {
+        onPeer: (conn) => {
+          if (!this.relayConns.includes(conn)) {
+            this.relayConns.push(conn);
+            this.hooks.onPeerJoin(conn);
+          }
+        },
+        onPeerLeave: (conn) => {
+          this.relayConns = this.relayConns.filter(c => c !== conn);
+          this.hooks.onPeerLeave(conn);
+        },
+        onMsg: (conn, msg) => this.hooks.onMsg(conn, msg as ClientMsg),
+      });
+    } catch { /* relay is optional — WebRTC may still work */ }
+  }
+
+  broadcast(msg: HostMsg, except?: PeerConn) {
     for (const c of this.conns) {
       if (c === except) continue;
       c.send(msg);
     }
   }
 
-  send(conn: LanConn, msg: HostMsg) { conn.send(msg); }
+  send(conn: PeerConn, msg: HostMsg) { conn.send(msg); }
 
   destroy() {
     this.polling = false;
     this.mqtt?.destroy();
     this.mqtt = null;
+    this.relay?.close();
+    this.relay = null;
+    this.relayConns = [];
     this.restConns.forEach(c => c.close());
     this.restConns = [];
     this.pcs.forEach(pc => { try { pc.close(); } catch { /* */ } });
@@ -259,7 +300,8 @@ export class NetHost {
 
 export class NetClient {
   private pc: RTCPeerConnection | null = null;
-  private conn: LanConn | null = null;
+  private conn: PeerConn | null = null;
+  private relayConn: RelayConn | null = null;
   private dead = false;
   private mqtt: MqttClientImpl | null = null;
   private mqttTried = false;
@@ -307,6 +349,14 @@ export class NetClient {
       await pc.setLocalDescription(offer);
       await gatherComplete(pc);
       await signal(code, 'offer', 'POST', { id: j.id, sdp: pc.localDescription!.sdp });
+      if (forceRelay()) {
+        // v3.12 — debug/deep-filtered-networks switch: skip WebRTC entirely
+        try { pc.close(); } catch { /* */ }
+        this.pc = null;
+        this.conn = null;
+        this.startRelay(code, j.id);
+        return;
+      }
       // wait for the host's answer (host polls offers every ~1.2 s)
       const deadline = Date.now() + ANSWER_TIMEOUT_MS;
       while (Date.now() < deadline) {
@@ -317,7 +367,18 @@ export class NetClient {
         if (this.dead) return;
         if (a.ok && a.sdp) {
           await pc.setRemoteDescription({ type: 'answer', sdp: a.sdp });
-          return; // datachannel opens (or errors) from here
+          // v3.12 — ICE can die silently here (UDP-restricted networks, VPN/TUN
+          // clients without UDP forwarding, public TURN relays that come and
+          // go). Give the channel a short window; if it stays dark, switch to
+          // the same-origin WebSocket relay that rides the path that already
+          // works (this page was served over it).
+          if (await this.channelOrTimeout(conn, pc)) return;
+          if (this.dead) return;
+          conn.closeSilent();
+          this.pc = null;
+          this.conn = null;
+          this.startRelay(code, j.id);
+          return;
         }
       }
       if (!this.dead) {
@@ -335,6 +396,37 @@ export class NetClient {
     }
   }
 
+  /** resolve true if the data channel opened, false on ICE failure / timeout */
+  private channelOrTimeout(conn: LanConn, pc: RTCPeerConnection): Promise<boolean> {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = (v: boolean) => {
+        if (done) return;
+        done = true;
+        pc.removeEventListener('connectionstatechange', on);
+        clearTimeout(t);
+        resolve(v);
+      };
+      const on = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') finish(false);
+      };
+      const t = setTimeout(() => finish(false), RELAY_AFTER_MS);
+      pc.addEventListener('connectionstatechange', on);
+      conn.onOpen(() => finish(true));
+    });
+  }
+
+  /** v3.12 — last-resort transport: the WebSocket relay on the game's own worker */
+  private startRelay(code: string, id: string) {
+    if (this.dead) return;
+    const rc = new RelayConn(relayWsUrl(code, signalBase()), { t: 'hi', role: 'j', id });
+    this.relayConn = rc;
+    this.conn = rc;
+    rc.onOpen(() => this.hooks.onOpen());
+    rc.onClose(() => this.hooks.onClosed());
+    rc.onData(d => this.hooks.onMsg(d as HostMsg));
+  }
+
   send(msg: ClientMsg) {
     if (this.mqtt) { this.mqtt.send(msg); return; }
     this.conn?.send(msg);
@@ -344,6 +436,8 @@ export class NetClient {
     this.dead = true;
     this.mqtt?.destroy();
     this.mqtt = null;
+    this.relayConn?.close();
+    this.relayConn = null;
     try { this.conn?.close(); } catch { /* */ }
     try { this.pc?.close(); } catch { /* */ }
     this.conn = null;

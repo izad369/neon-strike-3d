@@ -27,6 +27,10 @@ export class SignalRoom {
     this.roomCode = '';
     this.iph = '';
     this.lastAnnounce = 0;
+    // v3.12 — WebSocket media relay state (in-memory only, lives with the DO)
+    this.socks = null;   // Set<WebSocket>
+    this.tags = null;    // Map<WebSocket, tag>   ('H' = host, 'Jxxxx' = joiner)
+    this.byTag = null;   // Map<tag, WebSocket>  (latest socket wins on reconnect)
   }
 
   async fetch(request) {
@@ -74,7 +78,30 @@ export class SignalRoom {
       for (const [, v] of await this.ctx.storage.list({ prefix: 'joiner:' })) {
         if (typeof v === 'number' && now - v < 300000) joiners++;
       }
-      return Response.json({ ok: true, hostActive, hostAgeMs: typeof host === 'number' ? now - host : null, joiners, now });
+      let relayJoiners = 0;
+      if (this.byTag) for (const t of this.byTag.keys()) if (t !== 'H') relayJoiners++;
+      return Response.json({ ok: true, hostActive, hostAgeMs: typeof host === 'number' ? now - host : null, joiners, relayJoiners, now });
+    }
+
+    // v3.12 — WebSocket media relay: when raw WebRTC dies (UDP-restricted
+    // networks, dead public TURN), both peers ride this instead. The game's
+    // own worker is the one origin BOTH sides provably reach.
+    if (action === 'relay') {
+      const up = (request.headers.get('upgrade') || '').toLowerCase();
+      if (up !== 'websocket') return Response.json({ ok: false, reason: 'need-ws' }, { status: 426 });
+      if (!this.socks) { this.socks = new Set(); this.tags = new Map(); this.byTag = new Map(); }
+      if (this.socks.size >= 17) return Response.json({ ok: false, reason: 'room-full' }, { status: 429 });
+      const pair = new WebSocketPair();
+      const server = pair[1];
+      server.accept();
+      this.socks.add(server);
+      server.addEventListener('message', (ev) => {
+        try { this.relayMsg(server, String(ev.data || '')); } catch { /* never kill the socket over one bad frame */ }
+      });
+      const bye = () => { try { this.relayBye(server); } catch { /* */ } };
+      server.addEventListener('close', bye);
+      server.addEventListener('error', bye);
+      return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
     if (action === 'join') {
@@ -124,6 +151,65 @@ export class SignalRoom {
     }
 
     return Response.json({ ok: false, reason: 'bad-action' }, { status: 404 });
+  }
+
+  // v3.12 — relay plumbing. First frame must be a hello; joiner frames always
+  // go to the host; host frames go to one joiner (to:<id>) or all (*).
+  relayMsg(server, raw) {
+    if (raw.length > 16000) return;
+    if (!this.tags) { this.tags = new Map(); this.byTag = new Map(); }
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
+    if (!m || typeof m !== 'object') return;
+    const tag = this.tags.get(server);
+    if (!tag) {
+      if (m.t !== 'hi') { try { server.send('{"t":"denied"}'); server.close(1008, 'hello first'); } catch { /* */ } return; }
+      let t = null;
+      if (m.role === 'h') t = 'H';
+      else if (m.role === 'j') {
+        const id = String(m.id || '');
+        if (/^J[A-Za-z0-9]{1,11}$/.test(id)) t = id;
+      }
+      if (!t) { try { server.send('{"t":"denied"}'); server.close(1008, 'bad hello'); } catch { /* */ } return; }
+      const prev = this.byTag.get(t);
+      if (prev && prev !== server) { // reconnect — the newest socket wins
+        try { prev.close(4000, 'replaced'); } catch { /* */ }
+        this.socks.delete(prev);
+        this.tags.delete(prev);
+      }
+      this.tags.set(server, t);
+      this.byTag.set(t, server);
+      try { server.send('{"t":"ok"}'); } catch { /* */ }
+      return;
+    }
+    if (m.t === 'ping') { try { server.send('{"t":"pong"}'); } catch { /* */ } return; }
+    if (m.t !== 'm' || !m.d || typeof m.d !== 'object') return;
+    const frame = JSON.stringify({ t: 'm', f: tag, d: m.d });
+    if (tag === 'H') {
+      const to = typeof m.to === 'string' && m.to !== '*' ? m.to : '';
+      if (to) {
+        const s = this.byTag.get(to);
+        if (s) { try { s.send(frame); } catch { /* */ } }
+      } else {
+        for (const [t2, s] of this.byTag) {
+          if (t2 !== 'H') { try { s.send(frame); } catch { /* */ } }
+        }
+      }
+    } else {
+      const s = this.byTag.get('H');
+      if (s) { try { s.send(frame); } catch { /* */ } }
+    }
+  }
+
+  relayBye(server) {
+    if (!this.tags) return;
+    const tag = this.tags.get(server);
+    this.tags.delete(server);
+    if (this.socks) this.socks.delete(server);
+    if (tag && this.byTag.get(tag) === server) this.byTag.delete(tag);
+    if (!tag) return;
+    const note = JSON.stringify({ t: 'bye', f: tag });
+    if (this.socks) for (const s of this.socks) { try { s.send(note); } catch { /* */ } }
   }
 
   // v3.10 — same-WiFi auto-discovery: every ~5 s the live host reports
@@ -239,6 +325,16 @@ async function handleSignal(request, url, env) {
     const out = new Response(r.body, r);
     for (const [k, v] of Object.entries(SIGNAL_CORS)) out.headers.set(k, v);
     return out;
+  }
+
+  // v3.12 — the relay is a WebSocket upgrade: pass the original request (its
+  // Upgrade header must survive) straight to the room DO.
+  const mRelay = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/relay$/);
+  if (mRelay) {
+    const ns = env && env.ROOM;
+    if (!ns) return corsJson({ ok: false, reason: 'no-binding' }, 500);
+    const room = ns.get(ns.idFromName(mRelay[1].toUpperCase()));
+    return room.fetch(new Request('https://room/relay', request));
   }
 
   const m = url.pathname.match(/^\/signal\/([A-Za-z0-9]{4,8})\/(host|join|offer|offers|answer|heartbeat|status)$/);
