@@ -80,7 +80,9 @@ export class SignalRoom {
       }
       let relayJoiners = 0;
       if (this.byTag) for (const t of this.byTag.keys()) if (t !== 'H') relayJoiners++;
-      return Response.json({ ok: true, hostActive, hostAgeMs: typeof host === 'number' ? now - host : null, joiners, relayJoiners, now });
+      const relayTags = [];
+      if (this.byTag) for (const [t, s] of this.byTag) relayTags.push(t + (s.readyState === 1 ? '' : ':closed'));
+      return Response.json({ ok: true, hostActive, hostAgeMs: typeof host === 'number' ? now - host : null, joiners, relayJoiners, relayTags, now });
     }
 
     // v3.12 — WebSocket media relay: when raw WebRTC dies (UDP-restricted
@@ -577,6 +579,16 @@ export default {
         status: 200,
         headers: { 'content-type': 'text/html;charset=UTF-8', 'cache-control': 'public, max-age=3600' },
       });
+    }
+    // v3.12.1 — the game HTML must NEVER be cached: some transparent ISP
+    // proxies (notably on Iranian networks) ignore must-revalidate and kept
+    // serving weeks-old bundles, so players ran outdated clients that could
+    // not use the relay. Force revalidation at every hop.
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      const res = env.ASSETS ? await env.ASSETS.fetch(request) : await fetch(request);
+      const out = new Response(res.body, res);
+      out.headers.set('cache-control', 'no-store, max-age=0, must-revalidate');
+      return out;
     }
     // everything else: serve the game (assets binding, SPA fallback)
     return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);

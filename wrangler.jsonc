@@ -7,11 +7,16 @@
 //   /bot/health  -> always-on health check
 //   /bot/discord -> Discord Interactions endpoint (24/7 slash commands)
 // Static assets are served FIRST for matching paths, so the game is untouched.
+//
+// NOTE: migrations for SignalRoom/Directory (v1/v2, new_sqlite_classes) were
+// applied on the remote long ago; re-declaring them from a fresh checkout
+// makes the API reject the deploy with 10074 — so they stay omitted here.
 {
   "name": "neon-strike-3d",
   "main": "worker/index.js",
   "compatibility_date": "2026-10-06",
   "assets": {
+    "run_worker_first": true,
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
@@ -22,10 +27,6 @@
       { "name": "DIRECTORY", "class_name": "Directory" }
     ]
   },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["SignalRoom"] },
-    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
-  ],
   "observability": {
     "enabled": true
   }

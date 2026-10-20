@@ -252,6 +252,11 @@ export class RelayHostSide {
     let vc = this.vconns.get(tag);
     if (!vc) {
       vc = new VConn(tag, this);
+      // v3.12.1 FIX — wire the game-message callback the moment the VConn is
+      // born. Without this the joiner's first 'hi' hit a null dataCb and was
+      // silently dropped: the host showed "player connected" but never sent
+      // the init snapshot, so relay joiners hung in the lobby forever.
+      vc.onData(m => { if (vc) this.hooks.onMsg(vc, m); });
       this.vconns.set(tag, vc);
       this.hooks.onPeer(vc);
     }
